@@ -71,7 +71,7 @@ cat <<EOF > "$CONFIG_FILE"
     }
   },
   "gateway": {
-    "port": $APP_PORT,
+    "port": 18789,
     "mode": "local",
     "bind": "loopback",
     "auth": {
