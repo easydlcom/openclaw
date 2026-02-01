@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # 1. 定义路径
-CONFIG_DIR="/data/.clawdbot"
+CONFIG_DIR="/data/.openclaw"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
 mkdir -p "$CONFIG_DIR"
 
