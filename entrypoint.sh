@@ -63,7 +63,8 @@ cat <<EOF > "$CONFIG_FILE"
   "channels": {
     "telegram": {
       "enabled": true,
-      "dmPolicy": "pairing",
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
       "botToken": "$TELEGRAM_TOKEN",
       "groupPolicy": "allowlist",
       "streamMode": "partial"
