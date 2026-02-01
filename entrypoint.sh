@@ -1,4 +1,6 @@
 #!/bin/sh
+set -e
+export NODE_OPTIONS="--max-old-space-size=1024"
 
 # 1. 定义路径
 CONFIG_DIR="/data/.openclaw"
@@ -23,10 +25,10 @@ cat <<EOF > "$CONFIG_FILE"
 {
   "meta": {
     "lastTouchedVersion": "2026.1.30",
-    "lastTouchedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    "lastTouchedAt": "2026-02-01T15:29:19Z"
   },
   "wizard": {
-    "lastRunAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+    "lastRunAt": "2026-02-01T15:29:19Z",
     "lastRunVersion": "2026.1.30",
     "lastRunCommand": "onboard",
     "lastRunMode": "local"
