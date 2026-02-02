@@ -59,7 +59,7 @@ LLM_MODEL_NAME=${LLM_MODEL_NAME:-"Grok 4.1 Fast Reasoning"}
 LLM_BASE_URL=${LLM_BASE_URL:-"https://api.x.ai/v1"}
 # 自动生成随机 Gateway Token，如果环境变量没给的话
 GEN_GATEWAY_TOKEN=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 32)
-FINAL_GATEWAY_TOKEN=${GATEWAY_TOKEN:-$GEN_GATEWAY_TOKEN}
+FINAL_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-${CLAWDBOT_GATEWAY_TOKEN:-${GATEWAY_TOKEN:-$GEN_GATEWAY_TOKEN}}}
 
 echo "🛠️ Configuring OpenClaw for SaaS instance..."
 
@@ -121,6 +121,9 @@ cat <<EOF > "$CONFIG_FILE"
     "bind": "$GATEWAY_BIND",
     "auth": {
       "mode": "token",
+      "token": "$FINAL_GATEWAY_TOKEN"
+    },
+    "remote": {
       "token": "$FINAL_GATEWAY_TOKEN"
     },
     "tailscale": {
