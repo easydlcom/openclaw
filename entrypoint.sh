@@ -30,7 +30,7 @@ get_mem_limit_mb() {
 if [ -z "$OPENCLAW_MAX_OLD_SPACE_MB" ]; then
   mem_limit_mb=$(get_mem_limit_mb)
   if [ -n "$mem_limit_mb" ]; then
-    calc=$((mem_limit_mb * 60 / 100))
+    calc=$((mem_limit_mb * 70 / 100))
     if [ "$calc" -lt 384 ]; then calc=384; fi
     if [ "$calc" -gt 768 ]; then calc=768; fi
     OPENCLAW_MAX_OLD_SPACE_MB=$calc
@@ -39,9 +39,14 @@ if [ -z "$OPENCLAW_MAX_OLD_SPACE_MB" ]; then
   fi
 fi
 
-if [ -z "${NODE_OPTIONS:-}" ]; then
-  export NODE_OPTIONS="--max-old-space-size=${OPENCLAW_MAX_OLD_SPACE_MB}"
+if [ -n "${NODE_OPTIONS:-}" ]; then
+  NODE_OPTIONS="${NODE_OPTIONS}"
+else
+  NODE_OPTIONS=""
 fi
+
+export NODE_OPTIONS="--max-old-space-size=${OPENCLAW_MAX_OLD_SPACE_MB} ${NODE_OPTIONS}"
+echo "[entrypoint] max-old-space-size=${OPENCLAW_MAX_OLD_SPACE_MB} MB"
 
 mkdir -p "$CONFIG_DIR" "$OPENCLAW_WORKSPACE_DIR"
 
