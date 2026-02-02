@@ -75,14 +75,13 @@ function isCloudEnvironment() {
 }
 
 // Where the gateway will listen internally (we proxy to it).
-// Gateway always binds to localhost on an internal port.
-// The wrapper exposes it externally via proxy.
+// The wrapper always proxies requests to the gateway.
 const IS_CLOUD = isCloudEnvironment();
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
-// In cloud environments, gateway must bind to 0.0.0.0 (lan) for proper network interface access.
-// Locally, bind to loopback for security.
+// In cloud environments, gateway binds to 0.0.0.0 (lan) for proper network interface access.
+// Locally, bind to loopback (127.0.0.1) for security.
 const GATEWAY_BIND = IS_CLOUD ? "lan" : "loopback";
 
 // Always run the built-from-source CLI entry directly to avoid PATH/global-install mismatches.

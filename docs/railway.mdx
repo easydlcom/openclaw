@@ -94,13 +94,17 @@ TELEGRAM_ALLOW_FROM='["*"]'
 
 Railway deployments use a **wrapper + gateway** architecture:
 
-- **Wrapper** (port 8080): HTTP server that provides the /setup UI and proxies requests
+- **Wrapper** (port 8080): HTTP server that provides the /setup UI and proxies requests to the gateway
 - **Gateway** (port 18789): OpenClaw gateway that handles agent communication
-- Cloud auto-detection: Gateway automatically binds to `0.0.0.0` (lan mode) in Railway/cloud environments for proper connectivity
+  - In cloud: Binds to `0.0.0.0` (lan mode) on internal port 18789
+  - In local: Binds to `127.0.0.1` (loopback) on port 18789
+- **Wrapper proxy**: Routes external traffic from port 8080 to gateway on port 18789
+
+Cloud auto-detection: Gateway automatically binds to `0.0.0.0` in Railway/cloud environments for proper network interface access.
 
 This architecture ensures:
 - Secure local binding in local/development environments
-- Public accessibility in cloud environments
+- Proper network connectivity in cloud environments
 - Easy setup via web UI without SSH access
 
 ## Setup flow
