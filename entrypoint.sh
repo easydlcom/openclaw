@@ -25,10 +25,10 @@ cat <<EOF > "$CONFIG_FILE"
 {
   "meta": {
     "lastTouchedVersion": "2026.1.30",
-    "lastTouchedAt": "2026-02-01T15:29:19Z"
+    "lastTouchedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   },
   "wizard": {
-    "lastRunAt": "2026-02-01T15:29:19Z",
+    "lastRunAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
     "lastRunVersion": "2026.1.30",
     "lastRunCommand": "onboard",
     "lastRunMode": "local"
@@ -100,13 +100,16 @@ cat <<EOF > "$CONFIG_FILE"
 }
 EOF
 
-# 关键：由于我们在 Dockerfile 里把核心放在了 /openclaw
-# 我们需要告诉 server.js 核心入口在哪里
+# 4. Add permission fixes
+chmod 600 "$CONFIG_FILE"
+chmod 700 "$CONFIG_DIR"
+
+# 5. Export environment variables
+export OPENCLAW_STATE_DIR="/data/.openclaw"
+export OPENCLAW_GATEWAY_TOKEN="$FINAL_GATEWAY_TOKEN"
 export OPENCLAW_ENTRY="/openclaw/dist/index.js"
 
-echo "✅ Configuration generated at $CONFIG_FILE"
-echo "🔑 Gateway Auth Token: $FINAL_GATEWAY_TOKEN"
-
-# 4. 启动服务
-echo "🚀 Starting OpenClaw Service..."
-exec npm start
+# 6. Add startup logic
+echo "✅ Configuration generated and secured at $CONFIG_FILE"
+echo "🚀 Starting Wrapper Server (server.js)..."
+exec node src/server.js
