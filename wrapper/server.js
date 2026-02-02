@@ -39,6 +39,24 @@ function resolveGatewayToken() {
   const envTok = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
   if (envTok) return envTok;
 
+  try {
+    const cfgPath = configPath();
+    if (fs.existsSync(cfgPath)) {
+      const raw = fs.readFileSync(cfgPath, "utf8");
+      const parsed = JSON.parse(raw);
+      const authToken = parsed?.gateway?.auth?.token;
+      if (typeof authToken === "string" && authToken.trim()) {
+        return authToken.trim();
+      }
+      const remoteToken = parsed?.gateway?.remote?.token;
+      if (typeof remoteToken === "string" && remoteToken.trim()) {
+        return remoteToken.trim();
+      }
+    }
+  } catch {
+    // ignore config read errors
+  }
+
   const tokenPath = path.join(STATE_DIR, "gateway.token");
   try {
     const existing = fs.readFileSync(tokenPath, "utf8").trim();
