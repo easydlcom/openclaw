@@ -7,7 +7,16 @@ OPENCLAW_WORKSPACE_DIR=${OPENCLAW_WORKSPACE_DIR:-/data/workspace}
 CONFIG_DIR="$OPENCLAW_STATE_DIR"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
 INTERNAL_GATEWAY_PORT=${INTERNAL_GATEWAY_PORT:-18789}
-GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-loopback}
+
+# Detect cloud environment (Railway, Fly, Render) and set appropriate bind mode
+# Cloud: bind to lan (0.0.0.0) to accept external connections
+# Local: bind to loopback (127.0.0.1) for security
+if [ -n "${RAILWAY_ENVIRONMENT:-}" ] || [ -n "${RAILWAY_PROJECT_ID:-}" ] || [ -n "${FLY_APP_NAME:-}" ] || [ -n "${RENDER:-}" ]; then
+  GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-lan}
+else
+  GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-loopback}
+fi
+
 OPENCLAW_MAX_OLD_SPACE_MB=${OPENCLAW_MAX_OLD_SPACE_MB:-}
 
 get_mem_limit_mb() {
@@ -61,6 +70,12 @@ LLM_BASE_URL=${LLM_BASE_URL:-"https://api.x.ai/v1"}
 GEN_GATEWAY_TOKEN=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 32)
 FINAL_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-${CLAWDBOT_GATEWAY_TOKEN:-${GATEWAY_TOKEN:-$GEN_GATEWAY_TOKEN}}}
 
+# Telegram security defaults
+# dmPolicy: Use "pairing" for security (not "open") unless explicitly set to "open"
+# allowFrom: Use allowlist from env var, or default to ["*"] for backward compat
+TELEGRAM_DM_POLICY=${TELEGRAM_DM_POLICY:-pairing}
+TELEGRAM_ALLOW_FROM=${TELEGRAM_ALLOW_FROM:-'["*"]'}
+
 echo "🛠️ Configuring OpenClaw for SaaS instance..."
 
 # 3. 动态生成 JSON (根据你提供的 2026.1.30 格式)
@@ -108,8 +123,8 @@ cat <<EOF > "$CONFIG_FILE"
   "channels": {
     "telegram": {
       "enabled": true,
-      "dmPolicy": "open",
-      "allowFrom": ["*"],
+      "dmPolicy": "$TELEGRAM_DM_POLICY",
+      "allowFrom": $TELEGRAM_ALLOW_FROM,
       "botToken": "$TELEGRAM_TOKEN",
       "groupPolicy": "allowlist",
       "streamMode": "partial"
