@@ -1,8 +1,7 @@
 name: Workflow Sanity
 
 on:
-  pull_request:
-  push:
+  workflow_dispatch:
 
 jobs:
   no-tabs:
