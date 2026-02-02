@@ -81,8 +81,8 @@ const IS_CLOUD = isCloudEnvironment();
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
-// In cloud environments, gateway must bind to 0.0.0.0 (lan) since Railway/cloud platforms
-// route traffic to it. Locally, bind to loopback for security.
+// In cloud environments, gateway must bind to 0.0.0.0 (lan) for proper network interface access.
+// Locally, bind to loopback for security.
 const GATEWAY_BIND = IS_CLOUD ? "lan" : "loopback";
 
 // Always run the built-from-source CLI entry directly to avoid PATH/global-install mismatches.
@@ -550,7 +550,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
   if (ok) {
     // Ensure gateway token is written into config so the browser UI can authenticate reliably.
-    // Cloud: bind lan (0.0.0.0) to accept Railway's external traffic.
+    // Cloud: bind lan (0.0.0.0) for proper network interface access.
     // Local: bind loopback for security since wrapper proxies externally.
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
