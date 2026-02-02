@@ -43,8 +43,8 @@ COPY wrapper/src/setup-app.js ./src/setup-app.js
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# 4. 提供 CLI 快捷方式 (修改路径为 /openclaw/dist/index.js)
-RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/index.js "$@"' > /usr/local/bin/openclaw \
+# 4. 提供 CLI 快捷方式 (修改路径为 /openclaw/dist/entry.js)
+RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"' > /usr/local/bin/openclaw \
   && chmod +x /usr/local/bin/openclaw
 
 # 5. 环境变量与端口
