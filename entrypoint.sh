@@ -1,11 +1,20 @@
 #!/bin/sh
 set -e
-export NODE_OPTIONS="--max-old-space-size=1024"
 
-# 1. 定义路径
-CONFIG_DIR="/data"
+# 1. 定义路径与运行参数
+OPENCLAW_STATE_DIR=${OPENCLAW_STATE_DIR:-/data/.openclaw}
+OPENCLAW_WORKSPACE_DIR=${OPENCLAW_WORKSPACE_DIR:-/data/workspace}
+CONFIG_DIR="$OPENCLAW_STATE_DIR"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
-mkdir -p "$CONFIG_DIR"
+INTERNAL_GATEWAY_PORT=${INTERNAL_GATEWAY_PORT:-18789}
+GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-loopback}
+OPENCLAW_MAX_OLD_SPACE_MB=${OPENCLAW_MAX_OLD_SPACE_MB:-512}
+
+if [ -z "${NODE_OPTIONS:-}" ]; then
+  export NODE_OPTIONS="--max-old-space-size=${OPENCLAW_MAX_OLD_SPACE_MB}"
+fi
+
+mkdir -p "$CONFIG_DIR" "$OPENCLAW_WORKSPACE_DIR"
 
 # 2. 设置默认值 (如果环境变量没传，用这些保底)
 # 注意：PORT 优先使用 Railway 注入的变量，如果没给则用你跑通的 18789
@@ -73,9 +82,9 @@ cat <<EOF > "$CONFIG_FILE"
     }
   },
   "gateway": {
-    "port": 18789,
+    "port": $INTERNAL_GATEWAY_PORT,
     "mode": "local",
-    "bind": "loopback",
+    "bind": "$GATEWAY_BIND",
     "auth": {
       "mode": "token",
       "token": "$FINAL_GATEWAY_TOKEN"
@@ -105,10 +114,11 @@ chmod 600 "$CONFIG_FILE"
 chmod 700 "$CONFIG_DIR"
 
 # 告知包装层配置路径与 Token
-export OPENCLAW_CONFIG_PATH="/data/openclaw.json"
-export OPENCLAW_STATE_DIR="/data"
+export OPENCLAW_CONFIG_PATH="$CONFIG_FILE"
+export OPENCLAW_STATE_DIR
+export OPENCLAW_WORKSPACE_DIR
 export OPENCLAW_GATEWAY_TOKEN="$FINAL_GATEWAY_TOKEN"
-export OPENCLAW_ENTRY="/openclaw/dist/index.js"
+export OPENCLAW_ENTRY="/openclaw/dist/entry.js"
 
 echo "✅ Configuration generated and secured at $CONFIG_FILE"
 echo "🚀 Starting Wrapper Server (server.js)..."
