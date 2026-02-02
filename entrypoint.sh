@@ -11,7 +11,7 @@ INTERNAL_GATEWAY_PORT=${INTERNAL_GATEWAY_PORT:-18789}
 # Detect cloud environment (Railway, Fly, Render) and set appropriate bind mode
 # Cloud: bind to lan (0.0.0.0) to accept external connections
 # Local: bind to loopback (127.0.0.1) for security
-if [ -n "${RAILWAY_ENVIRONMENT:-}" ] || [ -n "${RAILWAY_PROJECT_ID:-}" ] || [ -n "${FLY_APP_NAME:-}" ] || [ -n "${RENDER:-}" ]; then
+if [ -n "${RAILWAY_ENVIRONMENT:-}" ] || [ -n "${RAILWAY_PROJECT_ID:-}" ] || [ -n "${FLY_APP_NAME:-}" ] || [ -n "${RENDER:-}" ] || [ -n "${RENDER_SERVICE_NAME:-}" ]; then
   GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-lan}
 else
   GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-loopback}
