@@ -8,7 +8,36 @@ CONFIG_DIR="$OPENCLAW_STATE_DIR"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
 INTERNAL_GATEWAY_PORT=${INTERNAL_GATEWAY_PORT:-18789}
 GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-loopback}
-OPENCLAW_MAX_OLD_SPACE_MB=${OPENCLAW_MAX_OLD_SPACE_MB:-512}
+OPENCLAW_MAX_OLD_SPACE_MB=${OPENCLAW_MAX_OLD_SPACE_MB:-}
+
+get_mem_limit_mb() {
+  if [ -f /sys/fs/cgroup/memory.max ]; then
+    limit=$(cat /sys/fs/cgroup/memory.max)
+    if [ "$limit" != "max" ]; then
+      echo $((limit / 1024 / 1024))
+      return
+    fi
+  fi
+  if [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+    limit=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)
+    if [ "$limit" -gt 0 ] && [ "$limit" -lt 9223372036854771712 ]; then
+      echo $((limit / 1024 / 1024))
+      return
+    fi
+  fi
+}
+
+if [ -z "$OPENCLAW_MAX_OLD_SPACE_MB" ]; then
+  mem_limit_mb=$(get_mem_limit_mb)
+  if [ -n "$mem_limit_mb" ]; then
+    calc=$((mem_limit_mb * 60 / 100))
+    if [ "$calc" -lt 384 ]; then calc=384; fi
+    if [ "$calc" -gt 768 ]; then calc=768; fi
+    OPENCLAW_MAX_OLD_SPACE_MB=$calc
+  else
+    OPENCLAW_MAX_OLD_SPACE_MB=640
+  fi
+fi
 
 if [ -z "${NODE_OPTIONS:-}" ]; then
   export NODE_OPTIONS="--max-old-space-size=${OPENCLAW_MAX_OLD_SPACE_MB}"
