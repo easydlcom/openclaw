@@ -100,13 +100,18 @@ cat <<EOF > "$CONFIG_FILE"
 }
 EOF
 
-# 关键：由于我们在 Dockerfile 里把核心放在了 /openclaw
-# 我们需要告诉 server.js 核心入口在哪里
+# 修复 OpenClaw 要求的安全权限
+chmod 600 "$CONFIG_FILE" 
+chmod 700 "$CONFIG_DIR"
+
+# 告知包装层配置路径与 Token
+export OPENCLAW_STATE_DIR="/data"
+export OPENCLAW_GATEWAY_TOKEN="$FINAL_GATEWAY_TOKEN"
 export OPENCLAW_ENTRY="/openclaw/dist/index.js"
 
-echo "✅ Configuration generated at $CONFIG_FILE"
-echo "🔑 Gateway Auth Token: $FINAL_GATEWAY_TOKEN"
+echo "✅ Configuration generated and secured at $CONFIG_FILE"
+echo "🚀 Starting Wrapper Server (server.js)..."
 
-# 4. 启动服务
-echo "🚀 Starting OpenClaw Service..."
-exec npm start
+# 必须通过 server.js 启动，才能正确代理流量
+# 根据你之前上传的文件，server.js 应该在 src 目录下
+exec node src/server.js
