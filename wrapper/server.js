@@ -62,10 +62,27 @@ process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
 // Backward-compat: some older flows expect CLAWDBOT_GATEWAY_TOKEN.
 process.env.CLAWDBOT_GATEWAY_TOKEN = process.env.CLAWDBOT_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN;
 
+// Detect if we're running in a cloud environment (Railway, Fly, Render, etc.)
+// These platforms expect apps to bind publicly on 0.0.0.0 and listen on $PORT.
+function isCloudEnvironment() {
+  return !!(
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RAILWAY_PROJECT_ID ||
+    process.env.FLY_APP_NAME ||
+    process.env.RENDER ||
+    process.env.RENDER_SERVICE_NAME
+  );
+}
+
 // Where the gateway will listen internally (we proxy to it).
+// The wrapper always proxies requests to the gateway.
+const IS_CLOUD = isCloudEnvironment();
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
+// In cloud environments, gateway binds to 0.0.0.0 (lan) for proper network interface access.
+// Locally, bind to loopback (127.0.0.1) for security.
+const GATEWAY_BIND = IS_CLOUD ? "lan" : "loopback";
 
 // Always run the built-from-source CLI entry directly to avoid PATH/global-install mismatches.
 const OPENCLAW_ENTRY = process.env.OPENCLAW_ENTRY?.trim() || "/openclaw/dist/entry.js";
@@ -133,7 +150,7 @@ async function startGateway() {
     "gateway",
     "run",
     "--bind",
-    "loopback",
+    GATEWAY_BIND,
     "--port",
     String(INTERNAL_GATEWAY_PORT),
     "--auth",
@@ -532,10 +549,11 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   // Optional channel setup (only after successful onboarding, and only if the installed CLI supports it).
   if (ok) {
     // Ensure gateway token is written into config so the browser UI can authenticate reliably.
-    // (We also enforce loopback bind since the wrapper proxies externally.)
+    // Cloud: bind lan (0.0.0.0) for proper network interface access.
+    // Local: bind loopback for security since wrapper proxies externally.
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
-    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", GATEWAY_BIND]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
 
     const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
