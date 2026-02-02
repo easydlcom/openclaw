@@ -105,6 +105,7 @@ chmod 600 "$CONFIG_FILE"
 chmod 700 "$CONFIG_DIR"
 
 # 告知包装层配置路径与 Token
+export OPENCLAW_CONFIG_PATH="/data/.openclaw/openclaw.json"
 export OPENCLAW_STATE_DIR="/data"
 export OPENCLAW_GATEWAY_TOKEN="$FINAL_GATEWAY_TOKEN"
 export OPENCLAW_ENTRY="/openclaw/dist/index.js"
