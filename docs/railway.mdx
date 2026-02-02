@@ -88,7 +88,11 @@ TELEGRAM_DM_POLICY=open
 TELEGRAM_ALLOW_FROM='["*"]'
 ```
 
-**Note:** When using pairing mode, you'll need to approve pairing requests via the setup UI at `/setup`.
+**Note:** When using pairing mode:
+1. User sends a message to your bot in Telegram
+2. Bot responds with a pairing code (e.g., "ABC123")
+3. You approve the pairing code via the setup UI at `/setup`
+4. Once approved, user can interact with the bot
 
 ## Network Architecture
 
