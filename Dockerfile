@@ -28,6 +28,16 @@ FROM node:22-bookworm
 ENV NODE_ENV=production
 WORKDIR /app
 
+# 安装 Chromium 浏览器以支持浏览器工具
+RUN apt-get update && apt-get install -y \
+    chromium \
+    fonts-ipafont-gothic fonts-wqy-zenhei fonts-thai-tlwg fonts-kacst fonts-freefont-ttf libxss1 \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# 设置环境变量告诉 OpenClaw 浏览器位置
+ENV CHROME_PATH=/usr/bin/chromium
+
 # 1. 准备包装层环境
 # 注意：确保你的仓库里有 wrapper/package.json (包含 express, http-proxy, tar)
 COPY wrapper/package.json ./
