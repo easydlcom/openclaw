@@ -3,7 +3,7 @@ set -e
 export NODE_OPTIONS="--max-old-space-size=1024"
 
 # 1. 定义路径
-CONFIG_DIR="/data/.openclaw"
+CONFIG_DIR="/data"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
 mkdir -p "$CONFIG_DIR"
 
@@ -105,7 +105,7 @@ chmod 600 "$CONFIG_FILE"
 chmod 700 "$CONFIG_DIR"
 
 # 告知包装层配置路径与 Token
-export OPENCLAW_CONFIG_PATH="/data/.openclaw/openclaw.json"
+export OPENCLAW_CONFIG_PATH="/data/openclaw.json"
 export OPENCLAW_STATE_DIR="/data"
 export OPENCLAW_GATEWAY_TOKEN="$FINAL_GATEWAY_TOKEN"
 export OPENCLAW_ENTRY="/openclaw/dist/index.js"
