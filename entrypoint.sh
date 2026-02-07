@@ -8,14 +8,9 @@ CONFIG_DIR="$OPENCLAW_STATE_DIR"
 CONFIG_FILE="$CONFIG_DIR/openclaw.json"
 INTERNAL_GATEWAY_PORT=${INTERNAL_GATEWAY_PORT:-18789}
 
-# Detect cloud environment (Railway, Fly, Render) and set appropriate bind mode
-# Cloud: bind to lan (0.0.0.0) to accept external connections
-# Local: bind to loopback (127.0.0.1) for security
-if [ -n "${RAILWAY_ENVIRONMENT:-}" ] || [ -n "${RAILWAY_PROJECT_ID:-}" ] || [ -n "${FLY_APP_NAME:-}" ] || [ -n "${RENDER:-}" ] || [ -n "${RENDER_SERVICE_NAME:-}" ]; then
-  GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-lan}
-else
-  GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-loopback}
-fi
+# Always bind the gateway to loopback so it is never directly exposed on the network.
+# External access should go through the wrapper (reverse proxy) only.
+GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-loopback}
 
 OPENCLAW_MAX_OLD_SPACE_MB=${OPENCLAW_MAX_OLD_SPACE_MB:-}
 
