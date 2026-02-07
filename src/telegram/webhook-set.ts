@@ -1,5 +1,6 @@
 import { type ApiClientOptions, Bot } from "grammy";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
+import { logVerbose } from "../globals.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
@@ -15,6 +16,7 @@ export async function setTelegramWebhook(opts: {
     ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
     : undefined;
   const bot = new Bot(opts.token, client ? { client } : undefined);
+  logVerbose(`[telegram] Setting webhook URL: ${opts.url}`);
   await withTelegramApiErrorLogging({
     operation: "setWebhook",
     fn: () =>
