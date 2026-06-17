@@ -1,91 +1,161 @@
 ---
 name: wavespeed
-description: Use any of 1,000+ AI models on WaveSpeedAI (image, video, audio, 3D generation). Triggers when the user wants to generate images, videos, audio/speech, or 3D assets using any AI model hosted on WaveSpeedAI. Also use when the user needs to browse models, upload media, or get API results from the platform.
+description: Generate or edit AI media (image, video, audio, 3D) by calling the wavespeed CLI on the user's machine. Use whenever the user asks to create, edit, animate, upscale, or transform a visual asset, generate audio/TTS/music, or produce marketing creatives. Every model on the WaveSpeed platform is one `wavespeed run <id>` call.
 ---
 
-# Wavespeed — Unified AI Media Generation
+# WaveSpeed
 
-Lets you use any of 1,000+ models on [WaveSpeedAI](https://wavespeed.ai) via a single REST API. Covers text-to-image, image-to-video, text-to-video, audio/speech, 3D, upscalers, and more.
+You have access to the `wavespeed` CLI. Every generation flows through one verb. There are no image / video shortcuts; the model id is always explicit.
 
-## API Basics
+## The four-step pattern
 
-- **Submit task:** `POST https://api.wavespeed.ai/api/v3/{model-id}`
-- **Poll result:** `GET https://api.wavespeed.ai/api/v3/predictions/{task-id}`
-- **Upload media:** `POST https://api.wavespeed.ai/api/v3/media/upload/binary`
-- **Auth:** `Authorization: Bearer ${WAVESPEED_API_KEY}`
-- **API key:** Get one at [https://wavespeed.ai/accesskey](https://wavespeed.ai/accesskey)
-- **Save key:** If the user provides a key, save it. Prefer saved keys. Only ask when none is available.
-
-### Common Task Flow
-
-1. Determine the right model ID for the task (see category references below)
-2. Build the request payload with model-specific parameters
-3. POST to `https://api.wavespeed.ai/api/v3/{model-id}`
-4. Extract `data.id` (task ID) from response
-5. Poll `GET https://api.wavespeed.ai/api/v3/predictions/{task-id}` until `status` is `completed` or `failed`
-6. Read output URLs from `data.outputs` array
-7. Download or present results to the user
-
-**Polling:** Poll every 1-2 seconds. Stop on `completed` or `failed`. Default timeout: 5 minutes.
-
-**Uploading media:** For image-to-video, image-to-image, or any model needing an input image/audio, first upload the file:
+### 1. FIND a model — search the live catalog
 
 ```bash
-curl -X POST https://api.wavespeed.ai/api/v3/media/upload/binary \
-  -H "Authorization: Bearer $WAVESPEED_API_KEY" \
-  -F 'file=@/path/to/file.png'
+wavespeed models "nano banana"
+wavespeed models --type image-to-video --popular
+wavespeed models --type image-to-image       # all models + prices, sorted by type
 ```
 
-Response gives a `download_url` to pass to the model as the `image` (or equivalent) field.
+**Price recon**: Omit `--popular` to see the full list with per-run prices. Pipe through `sort` or scan manually for budget decisions. `--type` supports: `text-to-image`, `image-to-image`, `text-to-video`, `image-to-video`, `audio-generation`, `video-generation`, `3d-generation`, `llm`.
 
-## Category Selection
-
-When the user's request is ambiguous about which category of model to use, ask one quick clarification question. Otherwise, pick the category yourself and proceed.
-
-### Image Generation (text-to-image, image-to-image, image editing)
-
-See [references/image.md](references/image.md) for model IDs, parameters, and examples.
-
-Triggers: "generate an image", "create a picture of", "draw", "make a photo", image editing/upscaling.
-
-### Video Generation (text-to-video, image-to-video)
-
-See [references/video.md](references/video.md) for model IDs, parameters, and examples.
-
-Triggers: "generate a video", "make a video of", "animate this", "turn this image into a video".
-
-### Audio / Speech (text-to-speech, voice cloning, music)
-
-See [references/audio.md](references/audio.md) for model IDs, parameters, and examples.
-
-Triggers: "generate speech", "text to speech", "make music", "voice clone", "generate audio".
-
-### 3D Asset Generation
-
-See [references/3d.md](references/3d.md) for model IDs, parameters, and examples.
-
-Triggers: "generate a 3D model", "create a 3D asset", "make a 3D object".
-
-## Scripts
-
-### `render_wavespeed.mjs`
-
-A general-purpose script for submitting a task, polling, and downloading results. Use for any model type (image, video, audio, 3D — not just video).
+### 2. INSPECT its inputs — dynamic schema, per model
 
 ```bash
-node skills/wavespeed/scripts/render_wavespeed.mjs \
-  --api-key "$WAVESPEED_API_KEY" \
-  --model "wavespeed-ai/flux-dev" \
-  --prompt "A cat in space" \
-  --output ./output.png
+wavespeed run google/nano-banana-2/text-to-image -h
 ```
 
-See `--help` for all options: `--model`, `--prompt`, `--image`, `--negative-prompt`, `--duration`, `--resolution`, `--seed`, `--output`, `--poll-interval`, `--timeout`.
+### 3. CONFIRM with the user before running
 
-## Defaults & Behavior
+Present the planned model, prompt, and any key parameters (e.g. aspect ratio, resolution, duration, input image URL) to the user in a clear summary. Ask explicitly: "Shall I proceed?" Wait for their go-ahead before executing.
 
-- **No clarifying questions** when the goal is usable — infer cinematic, visual, or audio details and proceed.
-- **Save API key** if user provides one; prefer saved key next time.
-- **If user asks how to get an API key:** tell them to register/login at https://wavespeed.ai/accesskey.
-- **Model IDs:** use the category reference files below to pick the right model ID and parameters.
-- **Cost:** Wavespeed pricing is per-output and shown in the playground. The skill estimates cost only when the user asks.
+### 4. RUN it — always pass --json so you can read the result
+
+```bash
+wavespeed run google/nano-banana-2/text-to-image \
+  -p "a cyberpunk skyline at golden hour" \
+  -i aspect_ratio="16:9" -i resolution="2k" --json
+```
+
+`run --json` returns `{ model, prompt, outputs: [url, ...], saved: [path, ...], elapsed_ms, raw }`. Use the URL when the user wants a link. Add `--download` if they need bytes on disk.
+
+> **Resolution reminder:** If the user didn't specify an image resolution or video quality, apply the defaults from the [Resolution defaults](#resolution-defaults) section — don't ask unless it matters to their use case.
+
+## Recommended defaults
+
+| Use case                      | Model                                                            | Price  |
+| ----------------------------- | ---------------------------------------------------------------- | ------ |
+| Text → image (默认)           | `openai/gpt-image-2/text-to-image`                               | —      |
+| Image edit / 图生图 (默认)    | `openai/gpt-image-2/edit`                                        | —      |
+| Text → video (默认)           | `bytedance/seedance-2.0/text-to-video`                           | —      |
+| Image → video (默认)          | `bytedance/seedance-2.0/image-to-video`                          | —      |
+| Text → image (budget)         | `google/nano-banana-2/text-to-image`                             | $0.07  |
+| Image edit (style/quality)    | `google/nano-banana-2/edit` — aspect_ratio supported, ~23s       | $0.07  |
+| Image edit (best value)       | `bytedance/seedream-v4.5/edit` — strong prompt adherence, ~28s   | $0.04  |
+| Image edit (budget)           | `wavespeed-ai/flux-2-flash/edit` — fast, decent quality, ~10-20s | $0.013 |
+| Image edit (bilingual CJK/EN) | `wavespeed-ai/qwen-image/edit` — Chinese+English prompts         | $0.02  |
+
+**Completion time varies dramatically by model** — always check expected duration. Nano Banana ~23s, Seedream ~28s, GPT Image 2 ~145s. Use background mode for slow models.
+
+Browse alternatives with `wavespeed models <query>`.
+
+## Resolution defaults
+
+When the user doesn't specify a resolution, apply these sensible defaults:
+
+| Use case              | Default                       | How to pass it                                                                               |
+| --------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| Text → image / 文生图 | **1K** (1024×1024 or closest) | `-i aspect_ratio="1:1"` or `-i size="1024x1024"` (check `-h` for which param the model uses) |
+| Image edit            | **1K** (same as above)        | Same — some models use `aspect_ratio`, others `size`. Always `-h` first.                     |
+| Text → video          | **480p** (854×480)            | `-i width=854 -i height=480` or `-i resolution="480p"` (check `-h`)                          |
+| Image → video         | **480p** (854×480)            | Same — some models accept `width`/`height`, others a single `resolution` string              |
+
+> **Resolution tiers (common):** 1K = 1024×1024 / 1024×768 / 768×1344 (depends on aspect ratio), 2K = 2048×2048, 4K = 4096×4096. For video: 480p = 854×480, 720p = 1280×720, 1080p = 1920×1080. Always verify the exact parameter names with `-h`.
+
+## Choosing the right edit model
+
+When you need specific output parameters, **inspect each candidate with `-h`** — they vary widely:
+
+| Need                                 | Check                                              | Example that supports it                                        |
+| ------------------------------------ | -------------------------------------------------- | --------------------------------------------------------------- |
+| Native aspect ratio (3:4, 4:5, etc.) | Look for `aspect_ratio` parameter                  | `google/nano-banana-2/edit` ✓                                   |
+| Pixel size override                  | Look for `size` parameter                          | `wavespeed-ai/flux-2-dev/edit` ✓                                |
+| Multi-image input                    | `images[]` (array) vs `image` (single string)      | Nano Banana: `images[]`; Qwen: `image`                          |
+| Chinese + English bilingual          | Model description mentions bilingual               | `wavespeed-ai/qwen-image/edit` ✓                                |
+| Budget                               | Compare per-run price in `wavespeed models` output | Z-Image-Turbo: $0.005 — Flux.2 Flash: $0.013 — Qwen Edit: $0.02 |
+
+Call `wavespeed run <model-id> -h` to see exactly what params the model accepts before running.
+
+### Edit an existing image — upload first, then pass the URL
+
+```bash
+URL=$(wavespeed upload ./input.jpg --json | jq -r .url)
+wavespeed run google/nano-banana-2/edit \
+  -p "replace the background with a sunlit kitchen" \
+  -i images="[\"$URL\"]" --json
+```
+
+### Image-to-video — same pattern
+
+```bash
+URL=$(wavespeed upload ./hero.jpg --json | jq -r .url)
+wavespeed run bytedance/seedance-2.0/image-to-video \
+  -p "subtle parallax, gentle wind" \
+  -i image="$URL" -i duration=5 --json
+```
+
+### Save outputs locally with a template
+
+```bash
+wavespeed run ... -p "..." --download "./out/{index}.{ext}"
+```
+
+## Project config and aliases
+
+If `wavespeed.json` exists (created by `wavespeed init`):
+
+- **`defaultModel`** — lets `wavespeed run -p "…"` (no model arg) work.
+- **Aliases** — named shortcuts that bundle model + default inputs. Run `wavespeed aliases` to see what's defined. `wavespeed run <alias> -h` shows the resolved schema. CLI `-i k=v` overrides alias defaults.
+
+The CLI never modifies the user's prompt or inputs. What you typed is what hits the API.
+
+## Installation
+
+```bash
+npm install -g @wavespeed/cli    # global install (may need sudo/nvm)
+npx @wavespeed/cli <cmd>         # drop-in, no install needed
+```
+
+The npm package name is **`@wavespeed/cli`**, not `wavespeed`. If global install fails due to permissions, `npx @wavespeed/cli` works identically as a drop-in replacement for all subcommands (just prefix every call with `npx @wavespeed/cli` instead of `wavespeed`).
+
+## Auth
+
+`wavespeed status` shows whether the user is signed in. If not:
+
+**Get your API key** at **[https://wavespeed.ai/accesskey](https://wavespeed.ai/accesskey)** — log in with your WaveSpeed account and copy the key from that page.
+
+Then run `wavespeed login` to authenticate:
+
+```bash
+wavespeed login                    # opens browser to https://wavespeed.ai/accesskey
+```
+
+**If the user pastes a key into chat manually** (e.g. `wsk_live_XXXXXX`), save it with `--api-key`:
+
+```bash
+wavespeed login --api-key "wsk_live_XXXXXX"
+# or via npx:
+npx @wavespeed/cli login --api-key "wsk_live_XXXXXX"
+```
+
+## Pitfalls
+
+- **Local file paths don't auto-upload** — call `wavespeed upload` first to get a CDN URL.
+- **Don't invent model IDs.** Always confirm via `wavespeed models` or `wavespeed schema <id>` before running.
+- **Use `--json` on every run** so you can read `outputs[0]` programmatically.
+- **Same-type models can have different parameter names.** `images[]` (array) vs `image` (single string) is the most common trap. Some models use `aspect_ratio`, others use `size` (pixels). Always `-h` each candidate.
+- **Vision model may not support image URLs.** If `vision_analyze` or `browser_vision` fails to describe the reference image, rely on the user's verbal description and proceed with upload → run directly — the edit model itself handles the visual reference.
+- **Complex prompts with double quotes break bash inline strings.** Prompts containing speech bubbles or quoted text (e.g. `"What do you like?"`) inside `-i prompt='...'` cause parse failures or silent rejections. **Fix:** write the prompt to a file and read it with `PROMPT=$(cat /path/to/prompt.txt)` then reference `"$PROMPT"` in the command.
+- **Some models reject complex prompts with in-image text.** Not all image-to-image models render speech bubbles or embedded text well — they may silently omit or garble them. If text is critical, prefer `google/nano-banana-2/edit` or `bytedance/seedream-v4.5/edit`.
+- **Timeouts on slow models.** `openai/gpt-image-2/edit` can take 145s+ to complete, exceeding default 120s timeout. **Fix:** run these in background mode with `notify_on_complete=true` and a timeout of 600s.
+- **`--download` to a directory path fails with EISDIR.** Use `--download ./out/{index}.{ext}` (a file template pattern), not `--download ./out/` (a directory).
