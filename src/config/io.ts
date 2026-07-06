@@ -24,7 +24,6 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
