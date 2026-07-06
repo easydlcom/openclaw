@@ -228,13 +228,6 @@
   - 如果 allowlist 自动写入失败，则继续走原有 pairing 逻辑。
   - 如果 owner 配置写入失败，不影响当前首个 DM 放行主路径，但会落日志便于排查。
 
-### 13. `package.json`
-
-- 差异摘要：根包新增 `@anthropic-ai/sdk` 和 `openai` 依赖。
-- 修改目的：为 fork 中新增的部署 / 集成能力或后续代码路径准备官方 SDK 依赖。
-- 涉及功能 / 行为变化：
-  - 依赖面扩大，锁文件随之变化。
-  - 这些包进入生产依赖集合。
 
 ### 14. `extensions/telegram/src/monitor.ts`
 
