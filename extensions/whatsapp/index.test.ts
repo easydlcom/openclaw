@@ -1,15 +1,22 @@
+// Whatsapp tests cover index plugin behavior.
+import { assertBundledChannelEntries } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
+import { whatsappPlugin } from "./channel-plugin-api.js";
 import entry from "./index.js";
 import setupEntry from "./setup-entry.js";
 
 describe("whatsapp bundled entries", () => {
-  it("loads the channel plugin without importing the broad api barrel", () => {
-    const plugin = entry.loadChannelPlugin();
-    expect(plugin.id).toBe("whatsapp");
+  assertBundledChannelEntries({
+    entry,
+    expectedId: "whatsapp",
+    expectedName: "WhatsApp",
+    setupEntry,
   });
 
-  it("loads the setup plugin without importing the broad api barrel", () => {
-    const plugin = setupEntry.loadSetupPlugin();
-    expect(plugin.id).toBe("whatsapp");
+  it("declares account config as channel-restart reload metadata", () => {
+    expect(whatsappPlugin.reload).toEqual({
+      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+      noopPrefixes: ["channels.whatsapp"],
+    });
   });
 });

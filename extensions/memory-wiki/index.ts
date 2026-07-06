@@ -1,9 +1,18 @@
+// Memory Wiki plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
 import { memoryWikiConfigSchema, resolveMemoryWikiConfig } from "./src/config.js";
 import { createWikiCorpusSupplement } from "./src/corpus-supplement.js";
 import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
-import { buildWikiPromptSection } from "./src/prompt-section.js";
+import {
+  configureMemoryWikiImportRunStateStore,
+  createMemoryWikiImportRunStateStore,
+} from "./src/import-runs-state.js";
+import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
+import {
+  configureMemoryWikiSourceSyncStateStore,
+  createMemoryWikiSourceSyncStateStore,
+} from "./src/source-sync-state.js";
 import {
   createWikiApplyTool,
   createWikiGetTool,
@@ -19,8 +28,14 @@ export default definePluginEntry({
   configSchema: memoryWikiConfigSchema,
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
+    configureMemoryWikiSourceSyncStateStore(
+      createMemoryWikiSourceSyncStateStore(api.runtime.state.openKeyedStore),
+    );
+    configureMemoryWikiImportRunStateStore(
+      createMemoryWikiImportRunStateStore(api.runtime.state.openKeyedStore),
+    );
 
-    api.registerMemoryPromptSupplement(buildWikiPromptSection);
+    api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));
     api.registerMemoryCorpusSupplement(
       createWikiCorpusSupplement({ config, appConfig: api.config }),
     );
@@ -28,8 +43,24 @@ export default definePluginEntry({
     api.registerTool(createWikiStatusTool(config, api.config), { name: "wiki_status" });
     api.registerTool(createWikiLintTool(config, api.config), { name: "wiki_lint" });
     api.registerTool(createWikiApplyTool(config, api.config), { name: "wiki_apply" });
-    api.registerTool(createWikiSearchTool(config, api.config), { name: "wiki_search" });
-    api.registerTool(createWikiGetTool(config, api.config), { name: "wiki_get" });
+    api.registerTool(
+      (ctx) =>
+        createWikiSearchTool(config, api.config, {
+          agentId: ctx.agentId,
+          agentSessionKey: ctx.sessionKey,
+          sandboxed: ctx.sandboxed,
+        }),
+      { name: "wiki_search" },
+    );
+    api.registerTool(
+      (ctx) =>
+        createWikiGetTool(config, api.config, {
+          agentId: ctx.agentId,
+          agentSessionKey: ctx.sessionKey,
+          sandboxed: ctx.sandboxed,
+        }),
+      { name: "wiki_get" },
+    );
     api.registerCli(
       ({ program }) => {
         registerWikiCli(program, config, api.config);

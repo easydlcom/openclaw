@@ -1,11 +1,12 @@
+// Signal plugin module implements accounts behavior.
 import {
   createAccountListHelpers,
   normalizeAccountId,
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { SignalAccountConfig } from "./runtime-api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SignalAccountConfig } from "./account-types.js";
 
 export type ResolvedSignalAccount = {
   accountId: string;
@@ -16,7 +17,11 @@ export type ResolvedSignalAccount = {
   config: SignalAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal", {
+  implicitDefaultAccount: {
+    channelKeys: ["account"],
+  },
+});
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 
@@ -27,6 +32,7 @@ function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): Signa
       | Record<string, Partial<SignalAccountConfig>>
       | undefined,
     accountId,
+    nestedObjectKeys: ["aliases"],
   });
 }
 
@@ -41,14 +47,15 @@ export function resolveSignalAccount(params: {
   const merged = mergeSignalAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const host = merged.httpHost?.trim() || "127.0.0.1";
+  const host = normalizeOptionalString(merged.httpHost) ?? "127.0.0.1";
   const port = merged.httpPort ?? 8080;
-  const baseUrl = merged.httpUrl?.trim() || `http://${host}:${port}`;
+  const baseUrl = normalizeOptionalString(merged.httpUrl) ?? `http://${host}:${port}`;
   const configured = Boolean(
-    merged.account?.trim() ||
-    merged.httpUrl?.trim() ||
-    merged.cliPath?.trim() ||
-    merged.httpHost?.trim() ||
+    normalizeOptionalString(merged.account) ||
+    normalizeOptionalString(merged.configPath) ||
+    normalizeOptionalString(merged.httpUrl) ||
+    normalizeOptionalString(merged.cliPath) ||
+    normalizeOptionalString(merged.httpHost) ||
     typeof merged.httpPort === "number" ||
     typeof merged.autoStart === "boolean",
   );

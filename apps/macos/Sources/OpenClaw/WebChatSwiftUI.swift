@@ -63,8 +63,12 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
         let defaults = decoded.defaults.map {
             OpenClawChatSessionsDefaults(
+                modelProvider: $0.modelProvider,
                 model: $0.model,
                 contextTokens: $0.contextTokens,
+                thinkingLevels: $0.thinkingLevels,
+                thinkingOptions: $0.thinkingOptions,
+                thinkingDefault: $0.thinkingDefault,
                 mainSessionKey: mainSessionKey)
         } ?? OpenClawChatSessionsDefaults(
             model: nil,
@@ -127,8 +131,20 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func compactSession(sessionKey: String) async throws {
-        _ = try await GatewayConnection.shared.request(
+        let response = try await GatewayConnection.shared.request(
             method: "sessions.compact",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 0,
+            retryTransportFailures: false)
+        try OpenClawSessionsCompactResponse.requireSuccess(from: response)
+    }
+
+    func setActiveSessionKey(_ sessionKey: String) async throws {
+        await MainActor.run {
+            WebChatManager.shared.recordActiveSessionKey(sessionKey)
+        }
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.messages.subscribe",
             params: ["key": AnyCodable(sessionKey)],
             timeoutMs: 10000)
     }
@@ -184,6 +200,15 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                     return nil
                 }
                 return .chat(chat)
+            case "session.message":
+                guard let payload = evt.payload else { return nil }
+                guard let message = try? JSONDecoder().decode(
+                    OpenClawSessionMessageEventPayload.self,
+                    from: JSONEncoder().encode(payload))
+                else {
+                    return nil
+                }
+                return .sessionMessage(message)
             case "agent":
                 guard let payload = evt.payload else { return nil }
                 guard let agent = try? JSONDecoder().decode(
@@ -238,6 +263,15 @@ final class WebChatSwiftUIWindowController {
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
+        Task { @MainActor [weak vm] in
+            let pushes = await GatewayConnection.shared.subscribe()
+            for await push in pushes {
+                guard let vm else { return }
+                guard case .snapshot = push else { continue }
+                let activeAgentId = await GatewayConnection.shared.cachedDefaultAgentId()
+                vm.syncActiveAgentId(activeAgentId)
+            }
+        }
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         self.hosting = NSHostingController(rootView: OpenClawChatView(
             viewModel: vm,

@@ -1,13 +1,21 @@
+// Memory Wiki plugin module implements unsafe local behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import {
+  createWikiPageFilename,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+} from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
+  assertMemoryWikiSourceSyncStateCapacity,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
   writeMemoryWikiSourceSyncState,
@@ -24,7 +32,7 @@ type UnsafeLocalArtifact = {
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
 
 function detectFenceLanguage(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   if (ext === ".json" || ext === ".jsonl") {
     return "json";
   }
@@ -46,7 +54,10 @@ async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
       files.push(...(await listAllowedFilesRecursive(fullPath)));
       continue;
     }
-    if (entry.isFile() && DIRECTORY_TEXT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+    if (
+      entry.isFile() &&
+      DIRECTORY_TEXT_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(entry.name)))
+    ) {
       files.push(fullPath);
     }
   }
@@ -109,7 +120,9 @@ function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePa
   const pageSlug = `${configuredBaseSlug}-${configuredHash}-${artifactBaseSlug}-${artifactHash}`;
   return {
     pageId: `source.unsafe-local.${pageSlug}`,
-    pagePath: path.join("sources", `unsafe-local-${pageSlug}.md`).replace(/\\/g, "/"),
+    pagePath: path
+      .join("sources", createWikiPageFilename(`unsafe-local-${pageSlug}`))
+      .replace(/\\/g, "/"),
   };
 }
 
@@ -203,6 +216,11 @@ export async function syncMemoryWikiUnsafeLocalSources(
 
   const artifacts = await collectUnsafeLocalArtifacts(config.unsafeLocal.paths);
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
+  assertMemoryWikiSourceSyncStateCapacity({
+    state,
+    group: "unsafe-local",
+    incomingCount: artifacts.length,
+  });
   const activeKeys = new Set<string>();
   const results = await Promise.all(
     artifacts.map(async (artifact) => {

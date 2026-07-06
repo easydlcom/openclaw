@@ -1,86 +1,45 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+/**
+ * Video-generation background task lifecycle adapters.
+ *
+ * Specializes the shared media background runner with video status text and completion metadata.
+ */
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
-  completeMediaGenerationTaskRun,
-  createMediaGenerationTaskRun,
-  failMediaGenerationTaskRun,
-  recordMediaGenerationTaskProgress,
-  wakeMediaGenerationTaskCompletion,
+  createMediaGenerationTaskLifecycle,
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
 
 export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
 
-export function createVideoGenerationTaskRun(params: {
-  sessionKey?: string;
-  requesterOrigin?: DeliveryContext;
-  prompt: string;
-  providerId?: string;
-}): VideoGenerationTaskHandle | null {
-  return createMediaGenerationTaskRun({
-    sessionKey: params.sessionKey,
-    requesterOrigin: params.requesterOrigin,
-    prompt: params.prompt,
-    providerId: params.providerId,
-    toolName: "video_generate",
-    taskKind: VIDEO_GENERATION_TASK_KIND,
-    label: "Video generation",
-    queuedProgressSummary: "Queued video generation",
-  });
-}
+/** Shared lifecycle configured with video-specific status text and event metadata. */
+export const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
+  toolName: "video_generate",
+  taskKind: VIDEO_GENERATION_TASK_KIND,
+  label: "Video generation",
+  queuedProgressSummary: "Queued video generation",
+  generatedLabel: "video",
+  failureProgressSummary: "Video generation failed",
+  eventSource: "video_generation",
+  announceType: "video generation task",
+  completionLabel: "video",
+});
 
-export function recordVideoGenerationTaskProgress(params: {
-  handle: VideoGenerationTaskHandle | null;
-  progressSummary: string;
-  eventSummary?: string;
-}) {
-  recordMediaGenerationTaskProgress(params);
-}
+/** Creates a queued video-generation background task run. */
+export const createVideoGenerationTaskRun = (
+  ...params: Parameters<typeof videoGenerationTaskLifecycle.createTaskRun>
+) => videoGenerationTaskLifecycle.createTaskRun(...params);
 
-export function completeVideoGenerationTaskRun(params: {
-  handle: VideoGenerationTaskHandle | null;
-  provider: string;
-  model: string;
-  count: number;
-  paths: string[];
-}) {
-  completeMediaGenerationTaskRun({
-    ...params,
-    generatedLabel: "video",
-  });
-}
+/** Records progress for an active video-generation task. */
+export const recordVideoGenerationTaskProgress = (
+  ...params: Parameters<typeof videoGenerationTaskLifecycle.recordTaskProgress>
+) => videoGenerationTaskLifecycle.recordTaskProgress(...params);
 
-export function failVideoGenerationTaskRun(params: {
-  handle: VideoGenerationTaskHandle | null;
-  error: unknown;
-}) {
-  failMediaGenerationTaskRun({
-    ...params,
-    progressSummary: "Video generation failed",
-  });
-}
+/** Marks a video-generation task complete and stores generated attachment metadata. */
+export const completeVideoGenerationTaskRun = (
+  ...params: Parameters<typeof videoGenerationTaskLifecycle.completeTaskRun>
+) => videoGenerationTaskLifecycle.completeTaskRun(...params);
 
-export async function wakeVideoGenerationTaskCompletion(params: {
-  config?: OpenClawConfig;
-  handle: VideoGenerationTaskHandle | null;
-  status: "ok" | "error";
-  statusLabel: string;
-  result: string;
-  mediaUrls?: string[];
-  statsLine?: string;
-}) {
-  await wakeMediaGenerationTaskCompletion({
-    config: params.config,
-    handle: params.handle,
-    status: params.status,
-    statusLabel: params.statusLabel,
-    result: params.result,
-    mediaUrls: params.mediaUrls,
-    statsLine: params.statsLine,
-    eventSource: "video_generation",
-    announceType: "video generation task",
-    toolName: "video_generate",
-    completionLabel: "video",
-  });
-}
+/** Marks a video-generation task failed and emits task status updates. */
+export const failVideoGenerationTaskRun = (
+  ...params: Parameters<typeof videoGenerationTaskLifecycle.failTaskRun>
+) => videoGenerationTaskLifecycle.failTaskRun(...params);

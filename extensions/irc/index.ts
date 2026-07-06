@@ -1,3 +1,4 @@
+// Irc plugin entrypoint registers its OpenClaw integration.
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
 export default defineBundledChannelEntry({
@@ -10,7 +11,7 @@ export default defineBundledChannelEntry({
     exportName: "ircPlugin",
   },
   secrets: {
-    specifier: "./src/secret-contract.js",
+    specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
   },
   runtime: {

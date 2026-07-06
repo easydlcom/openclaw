@@ -1,3 +1,4 @@
+// Covers OpenClaw CLI PATH construction.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureOpenClawCliOnPath } from "./path-env.js";
@@ -131,6 +132,26 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated[0]).toBe(appBinDir);
   });
 
+  it("keeps the current runtime directory ahead of system PATH hardening", () => {
+    const tmp = abs("/tmp/openclaw-path/case-runtime-dir");
+    const nodeBinDir = path.join(tmp, "node-bin");
+    const nodeExec = path.join(nodeBinDir, "node");
+    setDir(tmp);
+    setDir(nodeBinDir);
+    setExe(nodeExec);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: nodeExec,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expect(updated[0]).toBe(nodeBinDir);
+    expect(updated.indexOf(nodeBinDir)).toBeLessThan(updated.indexOf("/usr/bin"));
+  });
+
   it("is idempotent", () => {
     process.env.PATH = "/bin";
     process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
@@ -210,6 +231,26 @@ describe("ensureOpenClawCliOnPath", () => {
       expectPathsAfter(withOptIn, "/usr/bin", [localBinDir]);
     },
   );
+
+  it("skips project-local bins when the working directory was deleted", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-deleted-cwd");
+    const localBinDir = path.join(tmp, "node_modules", ".bin");
+    setDir(localBinDir);
+    setExe(path.join(localBinDir, "openclaw"));
+    resetBootstrapEnv();
+    process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = "1";
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      ensureOpenClawCliOnPath({ execPath: appCli, homeDir: tmp, platform: "darwin" });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect((process.env.PATH ?? "").split(path.delimiter)).not.toContain(localBinDir);
+  });
 
   it("prepends XDG_BIN_HOME ahead of other user bin fallbacks", () => {
     const { tmp, appCli } = setupAppCliRoot("case-xdg-bin-home");
@@ -324,5 +365,64 @@ describe("ensureOpenClawCliOnPath", () => {
     const { params, expectedPaths, anchor } = setup();
     const updated = bootstrapPath(params);
     expectPathsAfter(updated, anchor, expectedPaths);
+  });
+
+  it("does not append HOMEBREW_PREFIX from process env", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-homebrew-env-ignored");
+    const maliciousPrefix = path.join(tmp, "evil-brew");
+    const maliciousBin = path.join(maliciousPrefix, "bin");
+    const maliciousSbin = path.join(maliciousPrefix, "sbin");
+    setDir(maliciousBin);
+    setDir(maliciousSbin);
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.HOMEBREW_PREFIX = maliciousPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expect(updated).not.toContain(maliciousBin);
+    expect(updated).not.toContain(maliciousSbin);
+  });
+
+  it("does not probe Linuxbrew fallbacks on macOS unless already inherited", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-no-darwin-linuxbrew");
+    const homeLinuxbrewBin = path.join(tmp, ".linuxbrew", "bin");
+    const globalLinuxbrewBin = "/home/linuxbrew/.linuxbrew/bin";
+    setDir(path.join(tmp, ".linuxbrew"));
+    setDir(homeLinuxbrewBin);
+    setDir("/home");
+    setDir("/home/linuxbrew");
+    setDir("/home/linuxbrew/.linuxbrew");
+    setDir(globalLinuxbrewBin);
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expect(updated).not.toContain(homeLinuxbrewBin);
+    expect(updated).not.toContain(globalLinuxbrewBin);
+  });
+
+  it("keeps inherited Linuxbrew path entries on macOS", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-keep-darwin-linuxbrew");
+    const globalLinuxbrewBin = "/home/linuxbrew/.linuxbrew/bin";
+    resetBootstrapEnv(`${globalLinuxbrewBin}:/usr/bin:/bin`);
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expect(updated).toContain(globalLinuxbrewBin);
   });
 });

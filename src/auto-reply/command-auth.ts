@@ -1,13 +1,24 @@
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+/** Command authorization helpers for owner and allowlist checks. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  getLoadedChannelPluginById,
+  listLoadedChannelPlugins,
+} from "../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
+import { shouldUseFromAsSenderFallback } from "./sender-identity.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -100,10 +111,10 @@ function resolveProviderFromContext(
 
 function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredProviderProbe {
   let droppedResolutionError = false;
-  const candidates = listChannelPlugins()
+  const candidates = listLoadedChannelPlugins()
     .map((plugin) => {
       const resolvedAllowFrom = buildProviderAllowFromResolution({
-        plugin,
+        plugin: plugin as ChannelPlugin,
         cfg,
         accountId: ctx.AccountId,
       });
@@ -252,7 +263,7 @@ function buildProviderAllowFromResolution(params: {
 
 function describeAllowFromResolutionError(err: unknown): string {
   if (err instanceof Error) {
-    const name = err.name.trim();
+    const name = normalizeOptionalString(err.name) ?? "";
     return name || "Error";
   }
   return "unknown_error";
@@ -271,7 +282,7 @@ function resolveOwnerAllowFromList(params: {
   }
   const filtered: string[] = [];
   for (const entry of raw) {
-    const trimmed = String(entry ?? "").trim();
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -280,7 +291,8 @@ function resolveOwnerAllowFromList(params: {
       const prefix = trimmed.slice(0, separatorIndex);
       const channel = normalizeAnyChannelId(prefix);
       if (channel) {
-        if (params.providerId && channel !== params.providerId) {
+        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
+        if (!params.providerId || channel !== params.providerId) {
           continue;
         }
         const remainder = trimmed.slice(separatorIndex + 1).trim();
@@ -420,12 +432,17 @@ function resolveOwnerAuthorizationState(params: {
 
 function resolveCommandSenderAuthorization(params: {
   commandAuthorized: boolean;
+  enforceOwnerForCommands: boolean;
+  nativeCommandAuthorized: boolean;
   isOwnerForCommands: boolean;
   senderCandidates: string[];
   commandsAllowFromList: string[] | null;
   providerResolutionError: boolean;
   commandsAllowFromConfigured: boolean;
 }): boolean {
+  if (params.enforceOwnerForCommands && !params.isOwnerForCommands) {
+    return false;
+  }
   if (
     params.commandsAllowFromList !== null ||
     (params.providerResolutionError && params.commandsAllowFromConfigured)
@@ -441,36 +458,7 @@ function resolveCommandSenderAuthorization(params: {
       !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
     );
   }
-  return params.commandAuthorized && params.isOwnerForCommands;
-}
-
-function isConversationLikeIdentity(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.includes("@g.us")) {
-    return true;
-  }
-  if (normalized.startsWith("chat_id:")) {
-    return true;
-  }
-  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
-}
-
-function shouldUseFromAsSenderFallback(params: {
-  from?: string | null;
-  chatType?: string | null;
-}): boolean {
-  const from = (params.from ?? "").trim();
-  if (!from) {
-    return false;
-  }
-  const chatType = (params.chatType ?? "").trim().toLowerCase();
-  if (chatType && chatType !== "direct") {
-    return false;
-  }
-  return !isConversationLikeIdentity(from);
+  return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
 }
 
 function resolveSenderCandidates(params: {
@@ -486,7 +474,7 @@ function resolveSenderCandidates(params: {
   const { plugin, cfg, accountId } = params;
   const candidates: string[] = [];
   const pushCandidate = (value?: string | null) => {
-    const trimmed = (value ?? "").trim();
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (!trimmed) {
       return;
     }
@@ -523,7 +511,7 @@ function resolveFallbackAllowFrom(params: {
   providerId?: ChannelId;
   accountId?: string | null;
 }): Array<string | number> {
-  const providerId = params.providerId?.trim();
+  const providerId = normalizeOptionalString(params.providerId);
   if (!providerId) {
     return [];
   }
@@ -569,7 +557,7 @@ function resolveFallbackAccountConfig(
     | undefined,
   accountId?: string | null,
 ) {
-  const normalizedAccountId = accountId?.trim().toLowerCase();
+  const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
   if (!accounts || !normalizedAccountId) {
     return undefined;
   }
@@ -578,7 +566,7 @@ function resolveFallbackAccountConfig(
     return direct;
   }
   const matchKey = Object.keys(accounts).find(
-    (key) => key.trim().toLowerCase() === normalizedAccountId,
+    (key) => normalizeOptionalLowercaseString(key) === normalizedAccountId,
   );
   return matchKey ? accounts[matchKey] : undefined;
 }
@@ -624,9 +612,11 @@ export function resolveCommandAuthorization(params: {
     ctx,
     cfg,
   );
-  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
-  const from = (ctx.From ?? "").trim();
-  const to = (ctx.To ?? "").trim();
+  const plugin = providerId
+    ? ((getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined) ?? undefined)
+    : undefined;
+  const from = normalizeOptionalString(ctx.From) ?? "";
+  const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );
@@ -685,9 +675,7 @@ export function resolveCommandAuthorization(params: {
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerState.ownerAllowAll || ownerState.explicitOwners.length > 0;
-  const senderIsOwner = ctx.ForceSenderIsOwnerFalse
-    ? false
-    : senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
+  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
@@ -695,11 +683,13 @@ export function resolveCommandAuthorization(params: {
       ? true
       : ownerAllowlistConfigured
         ? senderIsOwner
-        : ownerState.allowAll ||
-          ownerState.ownerCandidatesForCommands.length === 0 ||
-          Boolean(matchedCommandOwner);
+        : senderIsOwnerByScope || Boolean(matchedCommandOwner);
+  const nativeCommandAuthorized =
+    commandAuthorized && isNativeCommandTurn(resolveCommandTurnContext(ctx)) && !requireOwner;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
+    enforceOwnerForCommands: enforceOwner,
+    nativeCommandAuthorized,
     isOwnerForCommands,
     senderCandidates,
     commandsAllowFromList,

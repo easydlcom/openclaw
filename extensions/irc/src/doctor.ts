@@ -1,4 +1,6 @@
+// Irc plugin module implements doctor behavior.
 import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -7,7 +9,7 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function isIrcMutableAllowEntry(raw: string): boolean {
-  const text = raw.trim().toLowerCase();
+  const text = normalizeLowercaseStringOrEmpty(raw);
   if (!text || text === "*") {
     return false;
   }
@@ -17,7 +19,7 @@ function isIrcMutableAllowEntry(raw: string): boolean {
     .replace(/^user:/, "")
     .trim();
 
-  return !normalized.includes("!") && !normalized.includes("@");
+  return !normalized.includes("@");
 }
 
 export const collectIrcMutableAllowlistWarnings =

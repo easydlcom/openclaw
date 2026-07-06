@@ -1,3 +1,5 @@
+// Feishu plugin module implements post behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRecord } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
@@ -128,12 +130,13 @@ function renderElement(
   imageKeys: string[],
   mediaKeys: Array<{ fileKey: string; fileName?: string }>,
   mentionedOpenIds: string[],
+  renderMediaPlaceholders: boolean,
 ): string {
   if (!isRecord(element)) {
     return escapeMarkdownText(toStringOrEmpty(element));
   }
 
-  const tag = toStringOrEmpty(element.tag).toLowerCase();
+  const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
   switch (tag) {
     case "text":
       return renderTextElement(element);
@@ -153,7 +156,7 @@ function renderElement(
       if (imageKey) {
         imageKeys.push(imageKey);
       }
-      return "![image]";
+      return renderMediaPlaceholders ? "![image]" : "";
     }
     case "media": {
       const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
@@ -161,10 +164,13 @@ function renderElement(
         const fileName = toStringOrEmpty(element.file_name) || undefined;
         mediaKeys.push({ fileKey, fileName });
       }
-      return "[media]";
+      return renderMediaPlaceholders ? "[media]" : "";
     }
     case "emotion":
       return renderEmotionElement(element);
+    case "md":
+    case "lark_md":
+      return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
     case "br":
       return "\n";
     case "hr":
@@ -226,7 +232,10 @@ function resolvePostPayload(parsed: unknown): PostPayload | null {
   return resolveLocalePayload(parsed);
 }
 
-export function parsePostContent(content: string): PostParseResult {
+export function parsePostContent(
+  content: string,
+  options: { renderMediaPlaceholders?: boolean; emptyTextFallback?: string } = {},
+): PostParseResult {
   try {
     const parsed = JSON.parse(content);
     const payload = resolvePostPayload(parsed);
@@ -250,7 +259,13 @@ export function parsePostContent(content: string): PostParseResult {
       }
       let renderedParagraph = "";
       for (const element of paragraph) {
-        renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+        renderedParagraph += renderElement(
+          element,
+          imageKeys,
+          mediaKeys,
+          mentionedOpenIds,
+          options.renderMediaPlaceholders !== false,
+        );
       }
       paragraphs.push(renderedParagraph);
     }
@@ -260,7 +275,7 @@ export function parsePostContent(content: string): PostParseResult {
     const textContent = [title, body].filter(Boolean).join("\n\n").trim();
 
     return {
-      textContent: textContent || FALLBACK_POST_TEXT,
+      textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),
       imageKeys,
       mediaKeys,
       mentionedOpenIds,

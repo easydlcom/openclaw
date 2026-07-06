@@ -1,3 +1,8 @@
+// Resolves ACP reset targets from sessions and command directives.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
@@ -5,10 +10,9 @@ import {
 } from "../../acp/persistent-bindings.types.js";
 import { resolveConfiguredBindingRecord } from "../../channels/plugins/binding-registry.js";
 import { listAcpBindings } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 const acpResetTargetDeps = {
   getSessionBindingService,
@@ -16,7 +20,7 @@ const acpResetTargetDeps = {
   resolveConfiguredBindingRecord,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       getSessionBindingService: typeof getSessionBindingService;
@@ -57,7 +61,9 @@ function resolveRawConfiguredAcpSessionKey(params: {
   parentConversationId?: string;
 }): string | undefined {
   for (const binding of acpResetTargetDeps.listAcpBindings(params.cfg)) {
-    const bindingChannel = (normalizeOptionalString(binding.match.channel) ?? "").toLowerCase();
+    const bindingChannel = normalizeLowercaseStringOrEmpty(
+      normalizeOptionalString(binding.match.channel),
+    );
     if (!bindingChannel || bindingChannel !== params.channel) {
       continue;
     }
@@ -111,7 +117,7 @@ export function resolveEffectiveResetTargetSessionKey(params: {
     activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
   const activeIsNonAcp = Boolean(activeSessionKey) && !activeAcpSessionKey;
 
-  const channel = (normalizeOptionalString(params.channel) ?? "").toLowerCase();
+  const channel = normalizeLowercaseStringOrEmpty(normalizeOptionalString(params.channel));
   const conversationId = normalizeOptionalString(params.conversationId) ?? "";
   if (!channel || !conversationId) {
     return activeAcpSessionKey;
@@ -177,3 +183,4 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   }
   return activeAcpSessionKey;
 }
+export { testing as __testing };

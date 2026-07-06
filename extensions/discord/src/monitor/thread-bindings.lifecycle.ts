@@ -1,5 +1,11 @@
+// Discord plugin module implements thread bindings.lifecycle behavior.
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -94,7 +100,7 @@ export function listThreadBindingsBySessionKey(params: {
 }
 
 export async function autoBindSpawnedDiscordSubagent(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId?: string;
   channel?: string;
   to?: string;
@@ -104,7 +110,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
   label?: string;
   boundBy?: string;
 }): Promise<ThreadBindingRecord | null> {
-  const channel = params.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   if (channel !== "discord") {
     return null;
   }
@@ -131,7 +137,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     }
   }
   if (!channelId) {
-    const to = params.to?.trim() || "";
+    const to = normalizeOptionalString(params.to) ?? "";
     if (!to) {
       return null;
     }
@@ -345,6 +351,6 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   return {
     checked: acpBindings.length,
     removed,
-    staleSessionKeys: [...new Set(staleSessionKeys)],
+    staleSessionKeys: uniqueStrings(staleSessionKeys),
   };
 }

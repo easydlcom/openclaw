@@ -1,7 +1,11 @@
+/**
+ * Browser plugin security audit checks for auth and remote CDP exposure.
+ */
 import type { OpenClawPluginSecurityAuditContext } from "openclaw/plugin-sdk/plugin-entry";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { isPrivateNetworkOptInEnabled, isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpUrl, resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { resolveBrowserControlAuth } from "./browser/control-auth.js";
 import { hasNonEmptyString } from "./record-shared.js";
@@ -13,10 +17,11 @@ const BLOCKED_HOSTNAMES = new Set([
 ]);
 
 function isTrustedPrivateHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
   return normalized.length > 0 && BLOCKED_HOSTNAMES.has(normalized);
 }
 
+/** Collects Browser plugin security audit findings for the current config/env. */
 export function collectBrowserSecurityAuditFindings(ctx: OpenClawPluginSecurityAuditContext) {
   const findings: Array<{
     checkId: string;

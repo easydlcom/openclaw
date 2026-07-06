@@ -1,10 +1,14 @@
+// Feishu plugin module implements docx behavior.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { Type } from "@sinclair/typebox";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
+import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
@@ -26,13 +30,22 @@ import {
   resolveFeishuToolAccount,
 } from "./tool-account.js";
 
-// ============ Helpers ============
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
+function resolveDocToolLocalRoots(ctx: {
+  workspaceDir?: string;
+  fsPolicy?: { workspaceOnly: boolean };
+}): string[] | undefined {
+  if (ctx.fsPolicy?.workspaceOnly !== true) {
+    return undefined;
+  }
+  const workspaceDir = ctx.workspaceDir?.trim();
+  // Fail closed: workspace-only with no resolved workspace must not fall back
+  // to default managed roots.
+  if (!workspaceDir) {
+    return [];
+  }
+  // Workspace paths are expected to be absolute; resolve() normalizes any
+  // accidental relative input before passing roots to loadWebMedia.
+  return [resolve(workspaceDir)];
 }
 
 /** Extract image URLs from markdown content */
@@ -91,7 +104,7 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
     .map((block) => {
       if (block.block_type === 31 && block.table?.merge_info) {
         const { merge_info: _merge_info, ...tableRest } = block.table;
-        return { ...block, table: tableRest };
+        return Object.assign({}, block, { table: tableRest });
       }
       return block;
     });
@@ -101,7 +114,6 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
 // ============ Core Functions ============
 
 /** Max blocks per documentBlockChildren.create request */
-const MAX_BLOCKS_PER_INSERT = 50;
 const MAX_CONVERT_RETRY_DEPTH = 8;
 
 async function convertMarkdown(client: Lark.Client, markdown: string) {
@@ -216,7 +228,8 @@ function normalizeConvertedBlockTree(
 
   const rootIds = (
     firstLevelIds && firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds
-  ).filter((id, index, arr) => typeof id === "string" && byId.has(id) && arr.indexOf(id) === index);
+  ).filter((id): id is string => typeof id === "string" && byId.has(id));
+  const uniqueRootIds = uniqueStrings(rootIds);
 
   const orderedBlocks: FeishuDocxBlock[] = [];
   const visited = new Set<string>();
@@ -236,7 +249,7 @@ function normalizeConvertedBlockTree(
     }
   };
 
-  for (const rootId of rootIds) {
+  for (const rootId of uniqueRootIds) {
     visit(rootId);
   }
 
@@ -249,7 +262,7 @@ function normalizeConvertedBlockTree(
     }
   }
 
-  return { orderedBlocks, rootIds: rootIds.filter((id): id is string => typeof id === "string") };
+  return { orderedBlocks, rootIds: uniqueRootIds };
 }
 
 async function insertBlocks(
@@ -396,26 +409,6 @@ async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
   return { blocks: allBlocks, firstLevelBlockIds: allRootIds };
 }
 
-/** Insert blocks in batches of MAX_BLOCKS_PER_INSERT to avoid API 400 errors */
-async function _chunkedInsertBlocks(
-  client: Lark.Client,
-  docToken: string,
-  blocks: FeishuDocxBlock[],
-  parentBlockId?: string,
-): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
-  const allChildren: FeishuDocxBlockChild[] = [];
-  const allSkipped: string[] = [];
-
-  for (let i = 0; i < blocks.length; i += MAX_BLOCKS_PER_INSERT) {
-    const batch = blocks.slice(i, i + MAX_BLOCKS_PER_INSERT);
-    const { children, skipped } = await insertBlocks(client, docToken, batch, parentBlockId);
-    allChildren.push(...children);
-    allSkipped.push(...skipped);
-  }
-
-  return { children: allChildren, skipped: allSkipped };
-}
-
 type Logger = { info?: (msg: string) => void };
 
 /**
@@ -511,7 +504,7 @@ async function uploadImageToDocx(
 }
 
 async function downloadImage(url: string, maxBytes: number): Promise<Buffer> {
-  const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+  const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
   return fetched.buffer;
 }
 
@@ -519,6 +512,7 @@ async function resolveUploadInput(
   url: string | undefined,
   filePath: string | undefined,
   maxBytes: number,
+  localRoots?: readonly string[],
   explicitFileName?: string,
   imageInput?: string, // data URI, plain base64, or local path
 ): Promise<{ buffer: Buffer; fileName: string }> {
@@ -557,7 +551,7 @@ async function resolveUploadInput(
       );
     }
     const mimeMatch = header.match(/data:([^;]+)/);
-    const ext = mimeMatch?.[1]?.split("/")[1] ?? "png";
+    const ext = extensionForMime(mimeMatch?.[1])?.slice(1) ?? "png";
     // Estimate decoded byte count from base64 length BEFORE allocating the
     // full buffer to avoid spiking memory on oversized payloads.
     const estimatedBytes = Math.ceil((trimmedData.length * 3) / 4);
@@ -584,12 +578,11 @@ async function resolveUploadInput(
 
     if (unambiguousPath || (absolutePath && existsSync(candidate))) {
       // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
-      // localRoots left undefined so loadWebMedia uses default roots (tmp, media,
-      // workspace, sandboxes) plus workspace-profile auto-discovery.
       const resolvedPath = resolve(candidate);
       const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedPath, {
         maxBytes,
         optimizeImages: false,
+        localRoots,
       });
       return { buffer: loaded.buffer, fileName: explicitFileName ?? basename(candidate) };
     }
@@ -636,7 +629,7 @@ async function resolveUploadInput(
   }
 
   if (url) {
-    const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+    const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
     const urlPath = new URL(url).pathname;
     const guessed = urlPath.split("/").pop() || "upload.bin";
     return {
@@ -646,11 +639,11 @@ async function resolveUploadInput(
   }
 
   // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
-  // localRoots left undefined — see comment above.
   const resolvedFilePath = resolve(filePath!);
   const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedFilePath, {
     maxBytes,
     optimizeImages: false,
+    localRoots,
   });
   return {
     buffer: loaded.buffer,
@@ -706,6 +699,7 @@ async function uploadImageBlock(
   client: Lark.Client,
   docToken: string,
   maxBytes: number,
+  localRoots?: readonly string[],
   url?: string,
   filePath?: string,
   parentBlockId?: string,
@@ -729,7 +723,14 @@ async function uploadImageBlock(
   }
 
   // Step 2: Resolve and upload the image buffer.
-  const upload = await resolveUploadInput(url, filePath, maxBytes, filename, imageInput);
+  const upload = await resolveUploadInput(
+    url,
+    filePath,
+    maxBytes,
+    localRoots,
+    filename,
+    imageInput,
+  );
   const fileToken = await uploadImageToDocx(
     client,
     imageBlockId,
@@ -760,6 +761,7 @@ async function uploadFileBlock(
   client: Lark.Client,
   docToken: string,
   maxBytes: number,
+  localRoots?: readonly string[],
   url?: string,
   filePath?: string,
   parentBlockId?: string,
@@ -770,7 +772,7 @@ async function uploadFileBlock(
   // Feishu API does not allow creating empty file blocks (block_type 23).
   // Workaround: create a placeholder text block, then replace it with file content.
   // Actually, file blocks need a different approach: use markdown link as placeholder.
-  const upload = await resolveUploadInput(url, filePath, maxBytes, filename);
+  const upload = await resolveUploadInput(url, filePath, maxBytes, localRoots, filename);
 
   // Create a placeholder text block first
   const placeholderMd = `[${upload.fileName}](https://example.com/placeholder)`;
@@ -1358,14 +1360,12 @@ async function listAppScopes(client: Lark.Client) {
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_doc: No config available, skipping doc tools");
     return;
   }
 
   // Check if any account is configured
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
     return;
   }
 
@@ -1376,14 +1376,23 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
 
   const getClient = (params: { accountId?: string } | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+    createFeishuToolClient({
+      api,
+      executeParams: params,
+      defaultAccountId,
+      requiredTool: { family: "doc", label: "Doc" },
+    });
 
   const getMediaMaxBytes = (
     params: { accountId?: string } | undefined,
     defaultAccountId?: string,
   ) =>
-    (resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId }).config
-      ?.mediaMaxMb ?? 30) *
+    (resolveFeishuToolAccount({
+      api,
+      executeParams: params,
+      defaultAccountId,
+      requiredTool: { family: "doc", label: "Doc" },
+    }).config?.mediaMaxMb ?? 30) *
     1024 *
     1024;
 
@@ -1392,8 +1401,11 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => {
         const defaultAccountId = ctx.agentAccountId;
+        const mediaLocalRoots = resolveDocToolLocalRoots(ctx);
         const trustedRequesterOpenId =
-          ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
+          ctx.messageChannel === "feishu"
+            ? normalizeOptionalString(ctx.requesterSenderId)
+            : undefined;
         return {
           name: "feishu_doc",
           label: "Feishu Doc",
@@ -1486,6 +1498,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.doc_token,
                       getMediaMaxBytes(p, defaultAccountId),
+                      mediaLocalRoots,
                       p.url,
                       p.file_path,
                       p.parent_block_id,
@@ -1500,6 +1513,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.doc_token,
                       getMediaMaxBytes(p, defaultAccountId),
+                      mediaLocalRoots,
                       p.url,
                       p.file_path,
                       p.parent_block_id,
@@ -1571,7 +1585,13 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         parameters: Type.Object({}),
         async execute() {
           try {
-            const result = await listAppScopes(getClient(undefined, ctx.agentAccountId));
+            const result = await listAppScopes(
+              createFeishuToolClient({
+                api,
+                defaultAccountId: ctx.agentAccountId,
+                requiredTool: { family: "scopes", label: "App Scopes" },
+              }),
+            );
             return json(result);
           } catch (err) {
             return json({ error: formatErrorMessage(err) });
@@ -1581,9 +1601,5 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
       { name: "feishu_app_scopes" },
     );
     registered.push("feishu_app_scopes");
-  }
-
-  if (registered.length > 0) {
-    api.logger.info?.(`feishu_doc: Registered ${registered.join(", ")}`);
   }
 }

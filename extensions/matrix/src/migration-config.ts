@@ -1,8 +1,10 @@
+// Matrix helper module supports migration config behavior.
 import fs from "node:fs";
 import os from "node:os";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   findMatrixAccountEntry,
   requiresExplicitMatrixDefaultAccount,
@@ -17,14 +19,14 @@ import {
 } from "./matrix/client/env-auth.js";
 import { resolveMatrixAccountStorageRoot, resolveMatrixCredentialsPath } from "./storage-paths.js";
 
-export type MatrixStoredCredentials = {
+type MatrixStoredCredentials = {
   homeserver: string;
   userId: string;
   accessToken: string;
   deviceId?: string;
 };
 
-export type MatrixMigrationAccountTarget = {
+type MatrixMigrationAccountTarget = {
   accountId: string;
   homeserver: string;
   userId: string;
@@ -33,14 +35,14 @@ export type MatrixMigrationAccountTarget = {
   storedDeviceId: string | null;
 };
 
-export type MatrixLegacyFlatStoreTarget = MatrixMigrationAccountTarget & {
+type MatrixLegacyFlatStoreTarget = MatrixMigrationAccountTarget & {
   selectionNote?: string;
 };
 
 type MatrixLegacyFlatStoreKind = "state" | "encrypted state";
 
 function clean(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function resolveMatrixAccountConfigEntry(
@@ -63,7 +65,7 @@ function resolveMatrixFlatStoreSelectionNote(
   );
 }
 
-export function resolveMatrixMigrationConfigFields(params: {
+function resolveMatrixMigrationConfigFields(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   accountId: string;
@@ -100,7 +102,7 @@ export function resolveMatrixMigrationConfigFields(params: {
   };
 }
 
-export function loadStoredMatrixCredentials(
+function loadStoredMatrixCredentials(
   env: NodeJS.ProcessEnv,
   accountId: string,
 ): MatrixStoredCredentials | null {
@@ -134,7 +136,7 @@ export function loadStoredMatrixCredentials(
   }
 }
 
-export function credentialsMatchResolvedIdentity(
+function credentialsMatchResolvedIdentity(
   stored: MatrixStoredCredentials | null,
   identity: {
     homeserver: string;

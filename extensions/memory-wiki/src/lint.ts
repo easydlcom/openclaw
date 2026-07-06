@@ -1,18 +1,31 @@
+// Memory Wiki plugin module implements lint behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import {
+  assessPageFreshness,
+  buildClaimContradictionClusters,
+  collectWikiClaimHealth,
+} from "./claim-health.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
+import {
+  isUnmanagedRawSourceSummary,
+  parseWikiMarkdown,
+  renderWikiMarkdown,
+  type WikiPageSummary,
+} from "./markdown.js";
+import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 
-export type MemoryWikiLintIssue = {
+type MemoryWikiLintIssue = {
   severity: "error" | "warning";
   category: "structure" | "provenance" | "links" | "contradictions" | "open-questions" | "quality";
   code:
+    | "invalid-frontmatter"
     | "missing-id"
     | "duplicate-id"
     | "missing-page-type"
@@ -22,13 +35,18 @@ export type MemoryWikiLintIssue = {
     | "missing-import-provenance"
     | "broken-wikilink"
     | "contradiction-present"
+    | "claim-conflict"
     | "open-question"
-    | "low-confidence";
+    | "low-confidence"
+    | "claim-low-confidence"
+    | "claim-missing-evidence"
+    | "stale-page"
+    | "stale-claim";
   path: string;
   message: string;
 };
 
-export type LintMemoryWikiResult = {
+type LintMemoryWikiResult = {
   vaultRoot: string;
   issueCount: number;
   issues: MemoryWikiLintIssue[];
@@ -40,10 +58,20 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+function isUnmanagedRawSourcePage(
+  page: WikiPageSummary,
+  managedImportedSourcePagePaths: Set<string>,
+): boolean {
+  return (
+    isUnmanagedRawSourceSummary(page) && !managedImportedSourcePagePaths.has(page.relativePath)
+  );
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
   for (const page of pages) {
     const withoutExtension = page.relativePath.replace(/\.md$/i, "");
+    validTargets.add(page.relativePath);
     validTargets.add(withoutExtension);
     validTargets.add(path.basename(withoutExtension));
   }
@@ -65,19 +93,30 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
   return issues;
 }
 
-function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
+function collectPageIssues(
+  pages: WikiPageSummary[],
+  managedImportedSourcePagePaths: Set<string>,
+): MemoryWikiLintIssue[] {
   const issues: MemoryWikiLintIssue[] = [];
   const pagesById = new Map<string, WikiPageSummary[]>();
+  const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
+    const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(
+      page,
+      managedImportedSourcePagePaths,
+    );
+
     if (!page.id) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "missing-id",
-        path: page.relativePath,
-        message: "Missing `id` frontmatter.",
-      });
+      if (requiresStructuredPageMetadata) {
+        issues.push({
+          severity: "error",
+          category: "structure",
+          code: "missing-id",
+          path: page.relativePath,
+          message: "Missing `id` frontmatter.",
+        });
+      }
     } else {
       const current = pagesById.get(page.id) ?? [];
       current.push(page);
@@ -85,13 +124,15 @@ function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
     }
 
     if (!page.pageType) {
-      issues.push({
-        severity: "error",
-        category: "structure",
-        code: "missing-page-type",
-        path: page.relativePath,
-        message: "Missing `pageType` frontmatter.",
-      });
+      if (requiresStructuredPageMetadata) {
+        issues.push({
+          severity: "error",
+          category: "structure",
+          code: "missing-page-type",
+          path: page.relativePath,
+          message: "Missing `pageType` frontmatter.",
+        });
+      }
     } else if (page.pageType !== toExpectedPageType(page)) {
       issues.push({
         severity: "error",
@@ -177,6 +218,63 @@ function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
         code: "low-confidence",
         path: page.relativePath,
         message: `Page confidence is low (${page.confidence.toFixed(2)}).`,
+      });
+    }
+
+    const freshness = assessPageFreshness(page);
+    if (
+      requiresStructuredPageMetadata &&
+      page.kind !== "report" &&
+      (freshness.level === "stale" || freshness.level === "unknown")
+    ) {
+      issues.push({
+        severity: "warning",
+        category: "quality",
+        code: "stale-page",
+        path: page.relativePath,
+        message: `Page freshness needs review (${freshness.reason}).`,
+      });
+    }
+  }
+
+  for (const claim of claimHealth) {
+    if (claim.missingEvidence) {
+      issues.push({
+        severity: "warning",
+        category: "provenance",
+        code: "claim-missing-evidence",
+        path: claim.pagePath,
+        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} is missing structured evidence.`,
+      });
+    }
+    if (typeof claim.confidence === "number" && claim.confidence < 0.5) {
+      issues.push({
+        severity: "warning",
+        category: "quality",
+        code: "claim-low-confidence",
+        path: claim.pagePath,
+        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} has low confidence (${claim.confidence.toFixed(2)}).`,
+      });
+    }
+    if (claim.freshness.level === "stale" || claim.freshness.level === "unknown") {
+      issues.push({
+        severity: "warning",
+        category: "quality",
+        code: "stale-claim",
+        path: claim.pagePath,
+        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} freshness needs review (${claim.freshness.reason}).`,
+      });
+    }
+  }
+
+  for (const cluster of buildClaimContradictionClusters({ pages })) {
+    for (const entry of cluster.entries) {
+      issues.push({
+        severity: "warning",
+        category: "contradictions",
+        code: "claim-conflict",
+        path: entry.pagePath,
+        message: `Claim cluster \`${cluster.label}\` has competing variants across ${cluster.entries.length} pages.`,
       });
     }
   }
@@ -273,6 +371,9 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
       body: "# Lint Report\n",
     }),
   );
+  // The lint report is itself a wiki page. Keep its metadata fail-closed before
+  // replacing the managed body so malformed frontmatter is never rewritten.
+  parseWikiMarkdown(original);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",
@@ -288,7 +389,22 @@ export async function lintMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
 ): Promise<LintMemoryWikiResult> {
   const compileResult = await compileMemoryWikiVault(config);
-  const issues = collectPageIssues(compileResult.pages);
+  const sourceSyncState = await readMemoryWikiSourceSyncState(config.vault.path);
+  const managedImportedSourcePagePaths = new Set(
+    Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
+  );
+  const issues = [
+    ...compileResult.frontmatterErrors.map(
+      (error): MemoryWikiLintIssue => ({
+        severity: "error",
+        category: "structure",
+        code: "invalid-frontmatter",
+        path: error.relativePath,
+        message: `Frontmatter failed to parse: ${error.message}`,
+      }),
+    ),
+    ...collectPageIssues(compileResult.pages, managedImportedSourcePagePaths),
+  ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
 

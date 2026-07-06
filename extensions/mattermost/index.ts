@@ -1,3 +1,4 @@
+// Mattermost plugin entrypoint registers its OpenClaw integration.
 import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
@@ -6,7 +7,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contra
 
 function registerSlashCommandRoute(api: OpenClawPluginApi): void {
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./runtime-api.js",
+    specifier: "./slash-route-api.js",
     exportName: "registerSlashCommandRoute",
   });
   register(api);
@@ -22,7 +23,7 @@ export default defineBundledChannelEntry({
     exportName: "mattermostPlugin",
   },
   secrets: {
-    specifier: "./src/secret-contract.js",
+    specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
   },
   runtime: {

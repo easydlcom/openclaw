@@ -1,9 +1,20 @@
+/** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
+import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
+import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
+import { isResetAuthorizedForContext } from "./reset-authorization.js";
+
+type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
+};
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
@@ -13,47 +24,111 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.BodyForCommands = resetTail;
   mutableCtx.BodyForAgent = resetTail;
   mutableCtx.BodyStripped = resetTail;
+  // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
   mutableCtx.AcpDispatchTailAfterReset = true;
 }
 
-function resolveSessionEntryForHookSessionKey(
-  sessionStore: HandleCommandsParams["sessionStore"] | undefined,
-  sessionKey: string,
-): HandleCommandsParams["sessionEntry"] | undefined {
-  if (!sessionStore) {
-    return undefined;
-  }
-  const directEntry = sessionStore[sessionKey];
-  if (directEntry) {
-    return directEntry;
-  }
-  const normalizedTarget = sessionKey.trim().toLowerCase();
-  if (!normalizedTarget) {
-    return undefined;
-  }
-  for (const [candidateKey, candidateEntry] of Object.entries(sessionStore)) {
-    if (candidateKey.trim().toLowerCase() === normalizedTarget) {
-      return candidateEntry;
-    }
-  }
-  return undefined;
+function isResetAuthorized(params: HandleCommandsParams): boolean {
+  return isResetAuthorizedForContext({
+    ctx: params.ctx,
+    cfg: params.cfg,
+    commandAuthorized: params.command.isAuthorizedSender || params.ctx.CommandAuthorized === true,
+  });
 }
 
+/** Handles reset/new commands or returns null when another command handler should continue. */
 export async function maybeHandleResetCommand(
   params: HandleCommandsParams,
 ): Promise<CommandHandlerResult | null> {
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+  const softReset = parseSoftResetCommand(params.command.commandBodyNormalized);
+  if (softReset.matched) {
+    if (!isResetAuthorized(params)) {
+      logVerbose(
+        `Ignoring /reset soft from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+
+    const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
+    const boundAcpKey =
+      boundAcpSessionKey && isAcpSessionKey(boundAcpSessionKey)
+        ? boundAcpSessionKey.trim()
+        : undefined;
+    if (boundAcpKey) {
+      return {
+        shouldContinue: false,
+        reply: { text: "Usage: /reset soft is not available for ACP-bound sessions yet." },
+      };
+    }
+
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const previousSessionEntry =
+      params.previousSessionEntry ?? (targetSessionEntry ? { ...targetSessionEntry } : undefined);
+    if (targetSessionEntry) {
+      const now = Date.now();
+      clearAllCliSessions(targetSessionEntry);
+      if (params.sessionEntry && params.sessionEntry !== targetSessionEntry) {
+        clearAllCliSessions(params.sessionEntry);
+        params.sessionEntry.updatedAt = now;
+        params.sessionEntry.lastInteractionAt = now;
+      }
+      if (params.sessionKey) {
+        clearBootstrapSnapshot(params.sessionKey);
+      }
+      targetSessionEntry.updatedAt = now;
+      targetSessionEntry.lastInteractionAt = now;
+      if (params.sessionStore && params.sessionKey) {
+        params.sessionStore[params.sessionKey] = targetSessionEntry;
+      }
+      if (params.storePath && params.sessionKey) {
+        await updateSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+          },
+          async (entry) => {
+            const next = { ...entry };
+            clearAllCliSessions(next);
+            return {
+              cliSessionBindings: next.cliSessionBindings,
+              cliSessionIds: next.cliSessionIds,
+              claudeCliSessionId: next.claudeCliSessionId,
+              updatedAt: now,
+              lastInteractionAt: now,
+            };
+          },
+        );
+      }
+    }
+
+    await emitResetCommandHooks({
+      action: "reset",
+      ctx: params.ctx,
+      cfg: params.cfg,
+      command: params.command,
+      sessionKey: params.sessionKey,
+      sessionEntry: targetSessionEntry,
+      previousSessionEntry,
+      workspaceDir: params.workspaceDir,
+    });
+    params.command.softResetTriggered = true;
+    params.command.softResetTail = softReset.tail;
+    return null;
+  }
+
+  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
   if (!resetMatch) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
+  if (!isResetAuthorized(params)) {
     logVerbose(
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }
 
-  const commandAction: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+  const commandAction: ResetCommandAction =
+    resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
   const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
   const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
   const boundAcpKey =
@@ -65,31 +140,20 @@ export async function maybeHandleResetCommand(
       cfg: params.cfg,
       sessionKey: boundAcpKey,
       reason: commandAction,
+      commandSource: `${params.command.surface}:${params.ctx.CommandSource ?? "text"}`,
     });
-    if (!resetResult.ok && !resetResult.skipped) {
-      logVerbose(
-        `acp reset-in-place failed for ${boundAcpKey}: ${resetResult.error ?? "unknown error"}`,
-      );
+    if (!resetResult.ok) {
+      logVerbose(`acp reset failed for ${boundAcpKey}: ${resetResult.error ?? "unknown error"}`);
     }
     if (resetResult.ok) {
-      const hookSessionEntry =
-        boundAcpKey === params.sessionKey
-          ? params.sessionEntry
-          : resolveSessionEntryForHookSessionKey(params.sessionStore, boundAcpKey);
-      const hookPreviousSessionEntry =
-        boundAcpKey === params.sessionKey
-          ? params.previousSessionEntry
-          : resolveSessionEntryForHookSessionKey(params.sessionStore, boundAcpKey);
-      await emitResetCommandHooks({
-        action: commandAction,
-        ctx: params.ctx,
-        cfg: params.cfg,
-        command: params.command,
-        sessionKey: boundAcpKey,
-        sessionEntry: hookSessionEntry,
-        previousSessionEntry: hookPreviousSessionEntry,
-        workspaceDir: params.workspaceDir,
-      });
+      if (resetResult.sessionId) {
+        (params.opts as InternalResetCommandOptions | undefined)?.onSessionPrepared?.({
+          sessionKey: resetResult.sessionKey ?? boundAcpKey,
+          sessionId: resetResult.sessionId,
+          storePath: resetResult.storePath,
+        });
+      }
+      params.command.resetHookTriggered = true;
       if (resetTail) {
         applyAcpResetTailContext(params.ctx, resetTail);
         if (params.rootCtx && params.rootCtx !== params.ctx) {
@@ -102,29 +166,35 @@ export async function maybeHandleResetCommand(
         reply: { text: "✅ ACP session reset in place." },
       };
     }
-    if (resetResult.skipped) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚠️ ACP session reset unavailable for this bound conversation. Rebind with /acp bind or /acp spawn.",
-        },
-      };
-    }
     return {
       shouldContinue: false,
       reply: { text: "⚠️ ACP session reset failed. Check /acp status and try again." },
     };
   }
 
-  await emitResetCommandHooks({
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  const hookResult = await emitResetCommandHooks({
     action: commandAction,
     ctx: params.ctx,
     cfg: params.cfg,
     command: params.command,
     sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
+    sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });
+  if (!resetTail) {
+    return {
+      shouldContinue: false,
+      ...(hookResult.routedReply
+        ? {}
+        : {
+            reply: {
+              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+            },
+          }),
+    };
+  }
   return null;
 }

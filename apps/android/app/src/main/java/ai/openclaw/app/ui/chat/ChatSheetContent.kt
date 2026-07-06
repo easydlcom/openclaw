@@ -1,5 +1,18 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCaption2
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileDanger
+import ai.openclaw.app.ui.mobileDangerSoft
+import ai.openclaw.app.ui.mobileText
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -29,25 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.chat.OutgoingAttachment
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCaption2
-import ai.openclaw.app.ui.mobileDanger
-import ai.openclaw.app.ui.mobileDangerSoft
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Returns a pending assistant prompt only when chat can accept it immediately. */
 internal fun resolvePendingAssistantAutoSend(
   pendingPrompt: String?,
   healthOk: Boolean,
@@ -58,24 +57,22 @@ internal fun resolvePendingAssistantAutoSend(
   return prompt
 }
 
-internal suspend fun dispatchPendingAssistantAutoSend(
-  pendingPrompt: String?,
-  healthOk: Boolean,
-  pendingRunCount: Int,
-  dispatch: suspend (String) -> Boolean,
-): Boolean {
-  val prompt =
-    resolvePendingAssistantAutoSend(
-      pendingPrompt = pendingPrompt,
-      healthOk = healthOk,
-      pendingRunCount = pendingRunCount,
-    ) ?: return false
-  return dispatch(prompt)
+/** Chooses the session key to load for initial chat hydration, if any. */
+internal fun resolveInitialChatLoadSessionKey(
+  sessionKey: String,
+  mainSessionKey: String,
+): String? {
+  val current = sessionKey.trim()
+  val main = mainSessionKey.trim().ifEmpty { "main" }
+  if (current.isNotEmpty() && current != "main" && current != main) return null
+  return main
 }
 
+/** Main Android chat sheet content: session picker, message list, and composer. */
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
+  val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -85,28 +82,34 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
+  val outboxItems by viewModel.chatOutboxItems.collectAsState()
 
   LaunchedEffect(Unit) {
-    viewModel.loadChat(mainSessionKey)
+    val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
+    if (loadSessionKey != null) {
+      viewModel.loadChat(loadSessionKey)
+    }
+    viewModel.refreshChatCommands()
   }
 
-  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
-    val accepted =
-      dispatchPendingAssistantAutoSend(
+  LaunchedEffect(pendingAssistantAutoSend, assistantAutoSendInFlight, healthOk, pendingRunCount, thinkingLevel) {
+    // Assistant-launch prompts should wait for a healthy idle chat so they do
+    // not race an already-running turn.
+    if (!healthOk) return@LaunchedEffect
+    val prompt =
+      resolvePendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
         healthOk = healthOk,
         pendingRunCount = pendingRunCount,
-      ) { prompt ->
-        viewModel.sendChatAwaitAcceptance(
-          message = prompt,
-          thinking = thinkingLevel,
-          attachments = emptyList(),
-        )
-      }
-    if (!accepted) return@LaunchedEffect
-    viewModel.clearPendingAssistantAutoSend()
+      ) ?: return@LaunchedEffect
+    viewModel.dispatchPendingAssistantAutoSend(
+      pendingPrompt = prompt,
+      thinking = thinkingLevel,
+    )
   }
 
   val context = LocalContext.current
@@ -119,6 +122,8 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
       scope.launch(Dispatchers.IO) {
+        // Bound both count and encoded size before attachments enter Compose
+        // state; sending uses these already-compressed payloads directly.
         val next =
           uris.take(8).mapNotNull { uri ->
             try {
@@ -152,12 +157,22 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     }
 
     ChatMessageListCard(
+      sessionKey = sessionKey,
       messages = messages,
+      historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       modifier = Modifier.weight(1f, fill = true),
+      outboxItems =
+        outboxItemsForSession(
+          items = outboxItems,
+          sessionKey = sessionKey,
+          mainSessionKey = mainSessionKey,
+        ),
+      onRetryOutbox = viewModel::retryChatOutboxCommand,
+      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
     )
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {
@@ -166,6 +181,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
+        commands = chatCommands,
         attachments = attachments,
         onDraftApplied = viewModel::clearChatDraft,
         onPickImages = { pickImages.launch("image/*") },
@@ -174,6 +190,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         onRefresh = {
           viewModel.refreshChat()
           viewModel.refreshChatSessions(limit = 200)
+          viewModel.refreshChatCommands()
         },
         onAbort = { viewModel.abortChat() },
         onSend = { text ->
@@ -186,8 +203,14 @@ fun ChatSheetContent(viewModel: MainViewModel) {
                 base64 = att.base64,
               )
             }
-          viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
+          val pendingAttachments = attachments.toList()
           attachments.clear()
+          val accepted = viewModel.sendChatAwaitAcceptance(message = text, thinking = thinkingLevel, attachments = outgoing)
+          if (!accepted && attachments.isEmpty()) {
+            // Refused sends must not silently drop selected attachments either.
+            attachments.addAll(pendingAttachments)
+          }
+          accepted
         },
       )
     }
@@ -252,6 +275,9 @@ private fun ChatErrorRail(errorText: String) {
   }
 }
 
+/**
+ * Image selected in the composer and held in memory until the next chat.send call.
+ */
 data class PendingImageAttachment(
   val id: String,
   val fileName: String,

@@ -1,9 +1,31 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatOutboxStatus
+import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.tools.ToolDisplayRegistry
+import ai.openclaw.app.ui.MobileColorsAccessor
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentSoft
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCaption2
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileCodeBg
+import ai.openclaw.app.ui.mobileCodeBorder
+import ai.openclaw.app.ui.mobileCodeText
+import ai.openclaw.app.ui.mobileDanger
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
+import ai.openclaw.app.ui.mobileWarning
+import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,30 +43,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.chat.ChatMessage
-import ai.openclaw.app.chat.ChatMessageContent
-import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.tools.ToolDisplayRegistry
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCaption2
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileCodeBg
-import ai.openclaw.app.ui.mobileCodeBorder
-import ai.openclaw.app.ui.mobileCodeText
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileWarning
-import ai.openclaw.app.ui.mobileWarningSoft
 import java.util.Locale
 
 private data class ChatBubbleStyle(
@@ -54,6 +57,7 @@ private data class ChatBubbleStyle(
   val roleColor: Color,
 )
 
+/** Renders one persisted chat message as text and image parts. */
 @Composable
 fun ChatMessageBubble(message: ChatMessage) {
   val role = message.role.trim().lowercase(Locale.US)
@@ -64,7 +68,8 @@ fun ChatMessageBubble(message: ChatMessage) {
     message.content.filter { part ->
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
-        else -> part.base64 != null
+        "image" -> !part.base64.isNullOrBlank()
+        else -> false
       }
     }
 
@@ -110,7 +115,10 @@ private fun ChatBubbleContainer(
 }
 
 @Composable
-private fun ChatMessageBody(content: List<ChatMessageContent>, textColor: Color) {
+private fun ChatMessageBody(
+  content: List<ChatMessageContent>,
+  textColor: Color,
+) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     for (part in content) {
       when (part.type) {
@@ -127,6 +135,7 @@ private fun ChatMessageBody(content: List<ChatMessageContent>, textColor: Color)
   }
 }
 
+/** Assistant placeholder shown while a run is active but no text has streamed yet. */
 @Composable
 fun ChatTypingIndicatorBubble() {
   ChatBubbleContainer(
@@ -143,6 +152,7 @@ fun ChatTypingIndicatorBubble() {
   }
 }
 
+/** Tool progress bubble resolved through Android's tool display registry. */
 @Composable
 fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
   val context = LocalContext.current
@@ -186,19 +196,86 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
   }
 }
 
+/** Queued/failed offline command with inline retry/delete controls; rendered as a user bubble. */
+@Composable
+fun ChatOutboxBubble(
+  item: ChatOutboxItem,
+  onRetry: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  val failed = item.status == ChatOutboxStatus.Failed
+  val statusColor = if (failed) mobileDanger else mobileWarning
+  val statusLabel =
+    when (item.status) {
+      ChatOutboxStatus.Queued -> "Queued — sends when reconnected"
+      ChatOutboxStatus.Sending -> "Sending…"
+      ChatOutboxStatus.Failed ->
+        item.lastError
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { "Failed — $it" } ?: "Failed"
+    }
+
+  ChatBubbleContainer(
+    style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
+    roleLabel = "You",
+  ) {
+    ChatMarkdown(text = item.text, textColor = mobileText)
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(
+        text = statusLabel,
+        style = mobileCaption1,
+        color = statusColor,
+        modifier = Modifier.weight(1f),
+      )
+      if (failed) {
+        ChatOutboxAction(label = "Retry", color = mobileAccent, onClick = onRetry)
+      }
+      if (item.status != ChatOutboxStatus.Sending) {
+        ChatOutboxAction(label = "Delete", color = mobileTextSecondary, onClick = onDelete)
+      }
+    }
+  }
+}
+
+@Composable
+private fun ChatOutboxAction(
+  label: String,
+  color: Color,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    shape = RoundedCornerShape(8.dp),
+    color = Color.Transparent,
+    contentColor = color,
+    border = BorderStroke(1.dp, color.copy(alpha = 0.5f)),
+  ) {
+    Text(
+      text = label,
+      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+    )
+  }
+}
+
+/** Live assistant stream bubble shown before the final message is committed. */
 @Composable
 fun ChatStreamingAssistantBubble(text: String) {
   ChatBubbleContainer(
     style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
     roleLabel = "OpenClaw · Live",
   ) {
-    ChatMarkdown(text = text, textColor = mobileText)
+    ChatMarkdown(text = text, textColor = mobileText, isStreaming = true)
   }
 }
 
 @Composable
-private fun bubbleStyle(role: String): ChatBubbleStyle {
-  return when (role) {
+private fun bubbleStyle(role: String): ChatBubbleStyle =
+  when (role) {
     "user" ->
       ChatBubbleStyle(
         alignEnd = true,
@@ -223,18 +300,19 @@ private fun bubbleStyle(role: String): ChatBubbleStyle {
         roleColor = mobileTextSecondary,
       )
   }
-}
 
-private fun roleLabel(role: String): String {
-  return when (role) {
+private fun roleLabel(role: String): String =
+  when (role) {
     "user" -> "You"
     "system" -> "System"
     else -> "OpenClaw"
   }
-}
 
 @Composable
-private fun ChatBase64Image(base64: String, mimeType: String?) {
+private fun ChatBase64Image(
+  base64: String,
+  mimeType: String?,
+) {
   val imageState = rememberBase64ImageState(base64)
   val image = imageState.image
 
@@ -246,7 +324,7 @@ private fun ChatBase64Image(base64: String, mimeType: String?) {
       modifier = Modifier.fillMaxWidth(),
     ) {
       Image(
-        bitmap = image!!,
+        bitmap = image,
         contentDescription = mimeType ?: "attachment",
         contentScale = ContentScale.Fit,
         modifier = Modifier.fillMaxWidth(),
@@ -267,7 +345,10 @@ private fun DotPulse(color: Color) {
 }
 
 @Composable
-private fun PulseDot(alpha: Float, color: Color) {
+private fun PulseDot(
+  alpha: Float,
+  color: Color,
+) {
   Surface(
     modifier = Modifier.size(6.dp).alpha(alpha),
     shape = CircleShape,
@@ -275,8 +356,29 @@ private fun PulseDot(alpha: Float, color: Color) {
   ) {}
 }
 
+/** Shared code block renderer used by chat Markdown. */
 @Composable
-fun ChatCodeBlock(code: String, language: String?) {
+fun ChatCodeBlock(
+  code: String,
+  language: String?,
+  isComplete: Boolean = true,
+) {
+  val display = code.trimEnd()
+  // Token colors come from the theme's code palette so light/dark both keep readable contrast.
+  val palette = MobileColorsAccessor.current
+  val tokenColors =
+    CodeTokenColors(
+      keyword = palette.codeKeyword,
+      string = palette.codeString,
+      comment = palette.codeComment,
+      number = palette.codeNumber,
+    )
+  // Keyed on content: streaming re-renders of unchanged blocks reuse the tokenized result,
+  // and still-open fences stay plain until the closing fence arrives.
+  val highlighted =
+    remember(display, language, isComplete, tokenColors) {
+      if (isComplete) buildHighlightedCode(display, language, tokenColors) else AnnotatedString(display)
+    }
   Surface(
     shape = RoundedCornerShape(8.dp),
     color = mobileCodeBg,
@@ -292,7 +394,7 @@ fun ChatCodeBlock(code: String, language: String?) {
         )
       }
       Text(
-        text = code.trimEnd(),
+        text = highlighted,
         fontFamily = FontFamily.Monospace,
         style = mobileCallout,
         color = mobileCodeText,

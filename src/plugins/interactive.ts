@@ -1,149 +1,102 @@
-import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+// Resolves interactive plugin entries from registry metadata.
 import {
-  normalizePluginInteractiveNamespace,
-  resolvePluginInteractiveMatch,
-  toPluginInteractiveRegistryKey,
-  validatePluginInteractiveNamespace,
-} from "./interactive-shared.js";
-import type { PluginInteractiveHandlerRegistration } from "./types.js";
+  resolvePluginInteractiveNamespaceMatch,
+  resolvePluginInteractiveRegistrationsMatch,
+} from "./interactive-registry.js";
+import {
+  claimPluginInteractiveCallbackDedupe,
+  commitPluginInteractiveCallbackDedupe,
+  releasePluginInteractiveCallbackDedupe,
+  type RegisteredInteractiveHandler,
+} from "./interactive-state.js";
+import { collectLivePluginRegistries } from "./runtime.js";
 
-type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-};
-
-type InteractiveRegistrationResult = {
-  ok: boolean;
-  error?: string;
-};
-
-type InteractiveDispatchResult =
+type InteractiveDispatchResult<TResult = unknown> =
   | { matched: false; handled: false; duplicate: false }
-  | { matched: true; handled: boolean; duplicate: boolean };
+  | { matched: true; handled: boolean; duplicate: boolean; result?: TResult };
 
 type PluginInteractiveDispatchRegistration = {
   channel: string;
   namespace: string;
 };
 
+/** Resolved interactive handler match passed to plugin callback dispatch. */
 export type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegistration> = {
   registration: RegisteredInteractiveHandler & TRegistration;
   namespace: string;
   payload: string;
 };
 
-type InteractiveState = {
-  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
-  callbackDedupe: ReturnType<typeof createDedupeCache>;
-};
+export {
+  clearPluginInteractiveHandlers,
+  clearPluginInteractiveHandlersForPlugin,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
+export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
-const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
-
-const getState = () =>
-  resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
-    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
-    callbackDedupe: resolveGlobalDedupeCache(
-      Symbol.for("openclaw.pluginInteractiveCallbackDedupe"),
-      {
-        ttlMs: 5 * 60_000,
-        maxSize: 4096,
-      },
-    ),
-  }));
-
-const getInteractiveHandlers = () => getState().interactiveHandlers;
-const getCallbackDedupe = () => getState().callbackDedupe;
-
-function resolveNamespaceMatch(
-  channel: string,
-  data: string,
-): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
-  return resolvePluginInteractiveMatch({
-    interactiveHandlers: getInteractiveHandlers(),
-    channel,
-    data,
-  });
-}
-
-export function registerPluginInteractiveHandler(
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  const interactiveHandlers = getInteractiveHandlers();
-  const namespace = normalizePluginInteractiveNamespace(registration.namespace);
-  const validationError = validatePluginInteractiveNamespace(namespace);
-  if (validationError) {
-    return { ok: false, error: validationError };
+function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
+  const existing = resolvePluginInteractiveNamespaceMatch(channel, data);
+  if (existing && existing.registration.registryOwned !== true) {
+    return existing;
   }
-  const key = toPluginInteractiveRegistryKey(registration.channel, namespace);
-  const existing = interactiveHandlers.get(key);
-  if (existing) {
-    return {
-      ok: false,
-      error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
-    };
-  }
-  interactiveHandlers.set(key, {
-    ...registration,
-    namespace,
-    pluginId,
-    pluginName: opts?.pluginName,
-    pluginRoot: opts?.pluginRoot,
-  });
-  return { ok: true };
-}
 
-export function clearPluginInteractiveHandlers(): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  const callbackDedupe = getCallbackDedupe();
-  interactiveHandlers.clear();
-  callbackDedupe.clear();
-}
-
-export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
-  const interactiveHandlers = getInteractiveHandlers();
-  for (const [key, value] of interactiveHandlers.entries()) {
-    if (value.pluginId === pluginId) {
-      interactiveHandlers.delete(key);
+  // Registry membership is lifecycle-owned. Resolve registry registrations only
+  // through live owners so a replaced or released registry cannot keep executing.
+  for (const registry of collectLivePluginRegistries()) {
+    const match = resolvePluginInteractiveRegistrationsMatch(
+      registry.interactiveHandlers ?? [],
+      channel,
+      data,
+    );
+    if (match) {
+      return match;
     }
   }
+  return null;
 }
 
+/** Dispatches one interactive callback payload to a matching plugin handler. */
 export async function dispatchPluginInteractiveHandler<
   TRegistration extends PluginInteractiveDispatchRegistration,
+  TResult extends { handled?: boolean } | void = { handled?: boolean } | void,
 >(params: {
   channel: TRegistration["channel"];
   data: string;
   dedupeId?: string;
   onMatched?: () => Promise<void> | void;
-  invoke: (
-    match: PluginInteractiveMatch<TRegistration>,
-  ) => Promise<{ handled?: boolean } | void> | { handled?: boolean } | void;
-}): Promise<InteractiveDispatchResult> {
-  const callbackDedupe = getCallbackDedupe();
-  const match = resolveNamespaceMatch(params.channel, params.data);
+  invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
+}): Promise<InteractiveDispatchResult<TResult>> {
+  const match = resolveLivePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
 
   const dedupeKey = params.dedupeId?.trim();
-  if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
+  if (dedupeKey && !claimPluginInteractiveCallbackDedupe(dedupeKey)) {
     return { matched: true, handled: true, duplicate: true };
   }
 
-  await params.onMatched?.();
+  try {
+    await params.onMatched?.();
+    const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    if (dedupeKey) {
+      commitPluginInteractiveCallbackDedupe(dedupeKey);
+    }
+    const shouldExposeResult =
+      Boolean(resolved) &&
+      typeof resolved === "object" &&
+      Object.keys(resolved as Record<string, unknown>).some((key) => key !== "handled");
 
-  const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
-  if (dedupeKey) {
-    callbackDedupe.check(dedupeKey);
+    return {
+      matched: true,
+      handled: resolved?.handled ?? true,
+      duplicate: false,
+      ...(shouldExposeResult ? { result: resolved } : {}),
+    };
+  } catch (error) {
+    if (dedupeKey) {
+      releasePluginInteractiveCallbackDedupe(dedupeKey);
+    }
+    throw error;
   }
-
-  return {
-    matched: true,
-    handled: resolved?.handled ?? true,
-    duplicate: false,
-  };
 }

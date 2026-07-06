@@ -1,4 +1,6 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+// File context helpers build user-visible context for media file references.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 
 const XML_ESCAPE_MAP: Record<string, string> = {
   "<": "&lt;",
@@ -17,10 +19,14 @@ function escapeFileBlockContent(value: string): string {
 }
 
 function sanitizeFileName(value: string | null | undefined, fallbackName: string): string {
-  const normalized = typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ").trim() : "";
-  return normalized || fallbackName;
+  const normalized =
+    normalizeOptionalString(
+      typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ") : undefined,
+    ) ?? "";
+  return sanitizeUntrustedFileName(normalized, fallbackName);
 }
 
+/** Renders sanitized attachment text as a model-visible file block without allowing file-tag injection. */
 export function renderFileContextBlock(params: {
   filename?: string | null;
   fallbackName?: string;

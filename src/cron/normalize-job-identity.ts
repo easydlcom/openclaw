@@ -1,9 +1,13 @@
+/** Repairs legacy cron job identity fields into the canonical id shape. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+
+/** Normalizes mutable cron job rows from old `jobId` storage into the canonical `id` field. */
 export function normalizeCronJobIdentityFields(raw: Record<string, unknown>): {
   mutated: boolean;
   legacyJobIdIssue: boolean;
 } {
-  const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
-  const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
+  const rawId = normalizeOptionalString(raw.id) ?? "";
+  const legacyJobId = normalizeOptionalString(raw.jobId) ?? "";
   const hadJobIdKey = "jobId" in raw;
   const normalizedId = rawId || legacyJobId;
   const idChanged = Boolean(normalizedId && raw.id !== normalizedId);

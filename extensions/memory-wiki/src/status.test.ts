@@ -1,6 +1,8 @@
+// Memory Wiki tests cover status plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import {
@@ -12,6 +14,30 @@ import {
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+
+async function resolveBridgeMissingArtifactsStatus() {
+  const config = resolveMemoryWikiConfig(
+    {
+      vaultMode: "bridge",
+      bridge: {
+        enabled: true,
+        readMemoryArtifacts: true,
+      },
+    },
+    { homedir: "/Users/tester" },
+  );
+
+  return resolveMemoryWikiStatus(config, {
+    appConfig: {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+      },
+    } as OpenClawConfig,
+    listPublicArtifacts: async () => [],
+    pathExists: async () => true,
+    resolveCommand: async () => null,
+  });
+}
 
 describe("resolveMemoryWikiStatus", () => {
   it("reports missing vault and missing requested obsidian cli", async () => {
@@ -57,6 +83,83 @@ describe("resolveMemoryWikiStatus", () => {
     });
 
     expect(status.warnings.map((warning) => warning.code)).toContain("unsafe-local-disabled");
+  });
+
+  it("warns when bridge mode has no exported memory artifacts", async () => {
+    const status = await resolveBridgeMissingArtifactsStatus();
+
+    expect(status.bridgePublicArtifactCount).toBe(0);
+    expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
+  });
+
+  it("discovers pages in nested subdirectories", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-nested-",
+      initialize: true,
+    });
+
+    await fs.mkdir(path.join(rootDir, "sources", "sub"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "top.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.top", title: "Top Source" },
+        body: "# Top Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "sub", "nested.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
+        body: "# Nested Source\n",
+      }),
+      "utf8",
+    );
+
+    const status = await resolveMemoryWikiStatus(config, {
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.pageCounts.source).toBe(2);
+    expect(status.sourceCounts.native).toBe(2);
+  });
+
+  it("excludes malformed pages from status counts (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-status-invalid-frontmatter-",
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "broken.md"),
+      [
+        "---",
+        "pageType: source",
+        "id: source.broken",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+        "---",
+        "",
+        "# Broken",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.healthy", title: "Healthy" },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const status = await resolveMemoryWikiStatus(config, {
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.pageCounts.source).toBe(1);
+    expect(status.sourceCounts.native).toBe(1);
   });
 
   it("counts source provenance from the vault", async () => {
@@ -138,12 +241,13 @@ describe("renderMemoryWikiStatus", () => {
       vaultExists: false,
       bridge: {
         enabled: false,
-        readMemoryCore: true,
+        readMemoryArtifacts: true,
         indexDreamReports: true,
         indexDailyNotes: true,
         indexMemoryRoot: true,
         followMemoryEvents: true,
       },
+      bridgePublicArtifactCount: null,
       obsidianCli: {
         enabled: true,
         requested: true,
@@ -203,5 +307,13 @@ describe("memory wiki doctor", () => {
     expect(report.fixes.map((fix) => fix.code)).toEqual(["vault-missing", "obsidian-cli-missing"]);
     expect(rendered).toContain("Suggested fixes:");
     expect(rendered).toContain("openclaw wiki init");
+  });
+
+  it("suggests bridge fixes when no public artifacts are exported", async () => {
+    const status = await resolveBridgeMissingArtifactsStatus();
+    const report = buildMemoryWikiDoctorReport(status);
+
+    expect(report.fixes.map((fix) => fix.code)).toContain("bridge-artifacts-missing");
+    expect(renderMemoryWikiDoctor(report)).toContain("exports public artifacts");
   });
 });

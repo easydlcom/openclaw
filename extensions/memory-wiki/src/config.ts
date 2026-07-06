@@ -1,5 +1,7 @@
+// Memory Wiki helper module supports config behavior.
 import os from "node:os";
 import path from "node:path";
+import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
 
 export const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
@@ -26,7 +28,7 @@ export type MemoryWikiPluginConfig = {
   };
   bridge?: {
     enabled?: boolean;
-    readMemoryCore?: boolean;
+    readMemoryArtifacts?: boolean;
     indexDreamReports?: boolean;
     indexDailyNotes?: boolean;
     indexMemoryRoot?: boolean;
@@ -44,6 +46,9 @@ export type MemoryWikiPluginConfig = {
   search?: {
     backend?: WikiSearchBackend;
     corpus?: WikiSearchCorpus;
+  };
+  context?: {
+    includeCompiledDigestPrompt?: boolean;
   };
   render?: {
     preserveHumanBlocks?: boolean;
@@ -66,7 +71,7 @@ export type ResolvedMemoryWikiConfig = {
   };
   bridge: {
     enabled: boolean;
-    readMemoryCore: boolean;
+    readMemoryArtifacts: boolean;
     indexDreamReports: boolean;
     indexDailyNotes: boolean;
     indexMemoryRoot: boolean;
@@ -84,6 +89,9 @@ export type ResolvedMemoryWikiConfig = {
   search: {
     backend: WikiSearchBackend;
     corpus: WikiSearchCorpus;
+  };
+  context: {
+    includeCompiledDigestPrompt: boolean;
   };
   render: {
     preserveHumanBlocks: boolean;
@@ -116,7 +124,7 @@ const MemoryWikiConfigSource = z.strictObject({
   bridge: z
     .strictObject({
       enabled: z.boolean().optional(),
-      readMemoryCore: z.boolean().optional(),
+      readMemoryArtifacts: z.boolean().optional(),
       indexDreamReports: z.boolean().optional(),
       indexDailyNotes: z.boolean().optional(),
       indexMemoryRoot: z.boolean().optional(),
@@ -142,6 +150,11 @@ const MemoryWikiConfigSource = z.strictObject({
       corpus: z.enum(WIKI_SEARCH_CORPORA).optional(),
     })
     .optional(),
+  context: z
+    .strictObject({
+      includeCompiledDigestPrompt: z.boolean().optional(),
+    })
+    .optional(),
   render: z
     .strictObject({
       preserveHumanBlocks: z.boolean().optional(),
@@ -163,13 +176,7 @@ const memoryWikiConfigSchemaBase = buildPluginConfigSchema(MemoryWikiConfigSourc
     return {
       success: false,
       error: {
-        issues: result.error.issues.map((issue) => ({
-          path: issue.path.filter((segment): segment is string | number => {
-            const kind = typeof segment;
-            return kind === "string" || kind === "number";
-          }),
-          message: issue.message,
-        })),
+        issues: mapPluginConfigIssues(result.error.issues),
       },
     };
   },
@@ -216,7 +223,7 @@ export function resolveMemoryWikiConfig(
     },
     bridge: {
       enabled: safeConfig.bridge?.enabled ?? false,
-      readMemoryCore: safeConfig.bridge?.readMemoryCore ?? true,
+      readMemoryArtifacts: safeConfig.bridge?.readMemoryArtifacts ?? true,
       indexDreamReports: safeConfig.bridge?.indexDreamReports ?? true,
       indexDailyNotes: safeConfig.bridge?.indexDailyNotes ?? true,
       indexMemoryRoot: safeConfig.bridge?.indexMemoryRoot ?? true,
@@ -234,6 +241,9 @@ export function resolveMemoryWikiConfig(
     search: {
       backend: safeConfig.search?.backend ?? DEFAULT_WIKI_SEARCH_BACKEND,
       corpus: safeConfig.search?.corpus ?? DEFAULT_WIKI_SEARCH_CORPUS,
+    },
+    context: {
+      includeCompiledDigestPrompt: safeConfig.context?.includeCompiledDigestPrompt ?? false,
     },
     render: {
       preserveHumanBlocks: safeConfig.render?.preserveHumanBlocks ?? true,

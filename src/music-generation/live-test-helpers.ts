@@ -1,84 +1,43 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+// Live-test helpers for music generation provider configuration.
+import type { OpenClawConfig } from "../config/types.js";
+import {
+  parseLiveCsvFilter,
+  parseProviderModelMap,
+  redactLiveApiKey,
+  resolveConfiguredLiveProviderModels,
+  resolveLiveAuthStore,
+} from "../media-generation/live-test-helpers.js";
 
+/**
+ * Live-test helpers for music generation providers.
+ *
+ * This module adapts the shared media live-test parsing/auth helpers to the
+ * music-generation config key and default provider model list.
+ */
+export { parseProviderModelMap, redactLiveApiKey };
+
+/** Default live model refs used when a provider is enabled but not explicitly mapped. */
 export const DEFAULT_LIVE_MUSIC_MODELS: Record<string, string> = {
+  fal: "fal/fal-ai/minimax-music/v2.6",
   google: "google/lyria-3-clip-preview",
-  minimax: "minimax/music-2.5+",
+  minimax: "minimax/music-2.6",
+  openrouter: "openrouter/google/lyria-3-pro-preview",
 };
 
-export function redactLiveApiKey(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return "none";
-  }
-  if (trimmed.length <= 12) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-4)}`;
-}
-
+/** Parse a comma-separated provider/model filter for live music tests. */
 export function parseCsvFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const values = trimmed
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  return values.length > 0 ? new Set(values) : null;
+  return parseLiveCsvFilter(raw);
 }
 
-export function parseProviderModelMap(raw?: string): Map<string, string> {
-  const entries = new Map<string, string>();
-  for (const token of raw?.split(",") ?? []) {
-    const trimmed = token.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash === trimmed.length - 1) {
-      continue;
-    }
-    entries.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
-  }
-  return entries;
-}
-
+/** Resolve configured provider/model refs from the musicGenerationModel defaults. */
 export function resolveConfiguredLiveMusicModels(cfg: OpenClawConfig): Map<string, string> {
-  const resolved = new Map<string, string>();
-  const configured = cfg.agents?.defaults?.musicGenerationModel;
-  const add = (value: string | undefined) => {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-      return;
-    }
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash === trimmed.length - 1) {
-      return;
-    }
-    resolved.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
-  };
-  if (typeof configured === "string") {
-    add(configured);
-    return resolved;
-  }
-  add(configured?.primary);
-  for (const fallback of configured?.fallbacks ?? []) {
-    add(fallback);
-  }
-  return resolved;
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.musicGenerationModel);
 }
 
+/** Resolve whether live music tests should require auth profile keys. */
 export function resolveLiveMusicAuthStore(params: {
   requireProfileKeys: boolean;
   hasLiveKeys: boolean;
-}): AuthProfileStore | undefined {
-  if (params.requireProfileKeys || !params.hasLiveKeys) {
-    return undefined;
-  }
-  return {
-    version: 1,
-    profiles: {},
-  };
+}) {
+  return resolveLiveAuthStore(params);
 }

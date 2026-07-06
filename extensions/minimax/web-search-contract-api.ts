@@ -1,42 +1,36 @@
+// Minimax API module exposes the plugin public contract.
 import {
-  resolveProviderWebSearchPluginConfig,
-  setProviderWebSearchPluginConfigValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
-const MINIMAX_CODING_PLAN_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
-
-function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
-  return searchConfig?.apiKey;
-}
-
-function setTopLevelCredentialValue(
-  searchConfigTarget: Record<string, unknown>,
-  value: unknown,
-): void {
-  searchConfigTarget.apiKey = value;
-}
+const MINIMAX_TOKEN_PLAN_ENV_VARS = [
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+] as const;
+const MINIMAX_WEB_SEARCH_ENV_VARS = [...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"] as const;
 
 export function createMiniMaxWebSearchProvider(): WebSearchProviderPlugin {
+  const credentialPath = "plugins.entries.minimax.config.webSearch.apiKey";
+
   return {
     id: "minimax",
     label: "MiniMax Search",
-    hint: "Structured results via MiniMax Coding Plan search API",
-    credentialLabel: "MiniMax Coding Plan key",
-    envVars: [...MINIMAX_CODING_PLAN_ENV_VARS],
+    hint: "Structured results via MiniMax Token Plan search API",
+    onboardingScopes: ["text-inference"],
+    credentialLabel: "MiniMax Token Plan key or OAuth token",
+    envVars: [...MINIMAX_WEB_SEARCH_ENV_VARS],
     placeholder: "sk-cp-...",
     signupUrl: "https://platform.minimax.io/user-center/basic-information/interface-key",
     docsUrl: "https://docs.openclaw.ai/tools/minimax-search",
     autoDetectOrder: 15,
-    credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.minimax.config.webSearch.apiKey"],
-    getCredentialValue: getTopLevelCredentialValue,
-    setCredentialValue: setTopLevelCredentialValue,
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "minimax")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "minimax", "apiKey", value);
-    },
+    credentialPath,
+    ...createWebSearchProviderContractFields({
+      credentialPath,
+      searchCredential: { type: "top-level" },
+      configuredCredential: { pluginId: "minimax" },
+    }),
     createTool: () => null,
   };
 }
