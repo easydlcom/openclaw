@@ -418,7 +418,7 @@ else
       "allowFrom": [],
       "botToken": "$TELEGRAM_TOKEN",
       "groupPolicy": "allowlist",
-      "streamMode": "partial"
+      "streaming": { "mode": "partial" }
     }
   },
   "gateway": {
