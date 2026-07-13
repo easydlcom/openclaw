@@ -1623,6 +1623,119 @@ export function startManagedGatewayConfigReloader(
       }),
   });
 
+  const runManagedRestart = async (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+    transactionOwnership: GatewayConfigReloadTransactionOwnership,
+    sourceConfig: OpenClawConfig,
+    restartOptions?: GatewayRestartRequestOptions,
+    beforeRestartRequest?: () => Promise<void>,
+  ) => {
+    const isCurrent = () => !stopped && transactionOwnership.isCurrent();
+    const assertCurrent = () => {
+      if (!isCurrent()) {
+        throw new GatewayConfigReloadSupersededError();
+      }
+    };
+    assertCurrent();
+    const restartLifecycle = beginGatewayRestartLifecycle();
+    let preparation:
+      | {
+          ownership: SharedGatewaySessionGenerationOwnership;
+          previousRequired: string | undefined | null;
+          previousCurrent: string | undefined;
+          nextGeneration: string | undefined;
+          runtimeConfig: OpenClawConfig;
+        }
+      | undefined;
+    try {
+      for (;;) {
+        assertCurrent();
+        const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevision();
+        const ownership = captureSharedGatewaySessionGenerationOwnership(
+          params.sharedGatewaySessionGenerationState,
+        );
+        const previousRequired = params.sharedGatewaySessionGenerationState.required;
+        const prepared = await params.activateRuntimeSecrets(
+          prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
+          {
+            reason: "restart-check",
+            activate: false,
+            ...(transactionOwnership.runtimeEnv
+              ? { env: transactionOwnership.runtimeEnv.env }
+              : {}),
+          },
+        );
+        assertCurrent();
+        const snapshotChanged =
+          getActiveSecretsRuntimeSnapshotRevision() !== previousSnapshotRevision;
+        const generationChanged = !isSharedGatewaySessionGenerationOwnershipCurrent(
+          params.sharedGatewaySessionGenerationState,
+          ownership,
+        );
+        if (snapshotChanged || generationChanged) {
+          continue;
+        }
+        preparation = {
+          ownership,
+          previousRequired,
+          previousCurrent: ownership.generation,
+          nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(prepared.config),
+          runtimeConfig: prepared.config,
+        };
+        break;
+      }
+    } catch (error) {
+      restartLifecycle.settle("rejected");
+      throw error;
+    }
+    const {
+      ownership: preparationOwnership,
+      previousRequired: previousRequiredSharedGatewaySessionGeneration,
+      previousCurrent: previousSharedGatewaySessionGeneration,
+      nextGeneration: nextSharedGatewaySessionGeneration,
+      runtimeConfig: preparedRuntimeConfig,
+    } = preparation;
+    let restartTransaction: GatewayRestartTransactionResult | undefined;
+    let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
+    try {
+      assertCurrent();
+      params.reconcileTerminalSessions(plan, preparedRuntimeConfig);
+      assertCurrent();
+      await beforeRestartRequest?.();
+      assertCurrent();
+      // Claim the shared-session requirement before creating any async restart
+      // emission. A rejected generation owner must never leave a live deferral.
+      requiredOwnership = setRequiredSharedGatewaySessionGenerationIfOwned(
+        params.sharedGatewaySessionGenerationState,
+        preparationOwnership,
+        previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration
+          ? nextSharedGatewaySessionGeneration
+          : null,
+      );
+      if (!requiredOwnership) {
+        throw new GatewayHotReloadStaleSecretsError();
+      }
+      // Restart successors inherit process.env. Publish the prepared layer at
+      // the admission edge, then roll it back if this restart is rejected.
+      transactionOwnership.publishRuntimeEnv();
+      restartTransaction = requestGatewayRestart(plan, preparedRuntimeConfig, {
+        ...restartOptions,
+        debtConfig: sourceConfig,
+        prepareRuntimeConfig: async () => {
+          const prepared = await params.activateRuntimeSecrets(
+            prepareRuntimeCandidate(preparedRuntimeConfig, sourceConfig, transactionOwnership),
+            {
+              reason: "restart-check",
+              activate: false,
+              ...(transactionOwnership.runtimeEnv
+                ? { env: transactionOwnership.runtimeEnv.env }
+                : {}),
+            },
+          );
+          assertCurrent();
+          return prepared.config;
+        },
       });
       if (restartTransaction.status === "recovery-pending") {
         throw new GatewayHotReloadRecoveryError("config restart");
