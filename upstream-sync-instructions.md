@@ -420,4 +420,4 @@
 
 ### 31. `README.md`
 
-- 差异摘要：README 修改为getclawcloud版本。
+- 差异摘要：README 修改为getclawcloud版本。总是保持当前内容，不同步上游变更
