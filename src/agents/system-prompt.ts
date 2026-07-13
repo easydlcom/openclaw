@@ -44,6 +44,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import {
   buildOpenClawToolFallbackText,
   shouldRenderOpenClawToolWorkflowHints,
@@ -1154,6 +1155,7 @@ export function buildAgentSystemPrompt(params: {
           isMinimal,
         }),
       }),
+      ...buildPromisedWorkPromptSection(),
       ...buildOverridablePromptSection({
         override: providerStablePrefix,
         fallback: [],
