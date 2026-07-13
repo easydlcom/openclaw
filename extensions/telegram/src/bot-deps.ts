@@ -43,7 +43,6 @@ export type TelegramBotDeps = {
   resolveStorePath: typeof resolveStorePath;
   getSessionEntry?: typeof getSessionEntry;
   listSessionEntries?: typeof listSessionEntries;
-  loadSessionStore?: typeof loadSessionStore;
   addChannelAllowFromStoreEntry: typeof addChannelAllowFromStoreEntry;
   readSessionUpdatedAt?: typeof readSessionUpdatedAt;
   readAmbientTranscriptWatermark?: typeof readAmbientTranscriptWatermark;

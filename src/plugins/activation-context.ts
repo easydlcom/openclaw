@@ -33,16 +33,6 @@ export type PluginActivationInputs = {
   autoEnabledReasons: Record<string, string[]>;
 };
 
-export type PluginActivationSnapshot = Pick<
-  PluginActivationInputs,
-  | "rawConfig"
-  | "config"
-  | "normalized"
-  | "activationSourceConfig"
-  | "activationSource"
-  | "autoEnabledReasons"
->;
-
 export type BundledPluginCompatibleActivationInputs = PluginActivationInputs & {
   compatPluginIds: string[];
 };
@@ -114,7 +104,7 @@ export function withActivatedPluginIds(params: {
   };
 }
 
-export function applyPluginCompatibilityOverrides(params: {
+function applyPluginCompatibilityOverrides(params: {
   config?: OpenClawConfig;
   compat?: PluginActivationCompatConfig;
   env: NodeJS.ProcessEnv;
@@ -183,7 +173,7 @@ function applyPluginAutoEnableForActivation(params: {
   });
 }
 
-export function resolvePluginActivationSnapshot(params: {
+function resolvePluginActivationSnapshot(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
   autoEnabledReasons?: Record<string, string[]>;
@@ -191,7 +181,7 @@ export function resolvePluginActivationSnapshot(params: {
   workspaceDir?: string;
   applyAutoEnable?: boolean;
   discovery?: PluginDiscoveryResult;
-}): PluginActivationSnapshot {
+}): PluginActivationInputs {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
   let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
@@ -220,7 +210,7 @@ export function resolvePluginActivationSnapshot(params: {
   };
 }
 
-export function resolvePluginActivationInputs(params: {
+function resolvePluginActivationInputs(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
   autoEnabledReasons?: Record<string, string[]>;

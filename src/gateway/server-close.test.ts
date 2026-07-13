@@ -7,7 +7,7 @@ import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
-const mocks = {
+const mocks = vi.hoisted(() => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
@@ -15,7 +15,7 @@ const mocks = {
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
-};
+}));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
@@ -64,6 +64,7 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
+    debug: vi.fn(),
     info: mocks.logInfo,
     warn: mocks.logWarn,
   })),
@@ -117,7 +118,9 @@ function createGatewayCloseTestDeps(
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,
     worktreeCleanup: null,
+    skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
+    taskUnsub: null,
     heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: null,
@@ -181,6 +184,62 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins an in-flight config reload before mutable runtime teardown", async () => {
+    const events: string[] = [];
+    let releaseReload!: () => void;
+    const reloadStopped = new Promise<void>((resolve) => {
+      releaseReload = resolve;
+    });
+    const configReloader = {
+      stop: vi.fn(async () => {
+        events.push("reload:stopping");
+        await reloadStopped;
+        events.push("reload:stopped");
+      }),
+    };
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar:stopped");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugins:stopped");
+      }),
+    };
+    const stopChannel = vi.fn(async () => {
+      events.push("channel:stopped");
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        configReloader,
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    const closePromise = close({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["reload:stopping"]);
+    });
+    expect(postReadySidecar.stop).not.toHaveBeenCalled();
+    expect(pluginServices.stop).not.toHaveBeenCalled();
+    expect(stopChannel).not.toHaveBeenCalled();
+
+    releaseReload();
+    await closePromise;
+
+    expect(events).toEqual([
+      "reload:stopping",
+      "reload:stopped",
+      "sidecar:stopped",
+      "plugins:stopped",
+      "channel:stopped",
+    ]);
   });
 
   it("stops plugin services before channel runtimes", async () => {
@@ -1297,12 +1356,14 @@ describe("createGatewayCloseHandler", () => {
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
     const lifecycleUnsub = vi.fn();
+    const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
     const stopTaskRegistryMaintenance = vi.fn();
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         stopTaskRegistryMaintenance,
         lifecycleUnsub,
+        taskUnsub,
         transcriptUnsub,
       }),
     );
@@ -1310,6 +1371,7 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "test shutdown" });
 
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
+    expect(taskUnsub).toHaveBeenCalledTimes(1);
     expect(transcriptUnsub).toHaveBeenCalledTimes(1);
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);

@@ -575,6 +575,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/gateway-protocol",
     packageDir: "gateway-protocol",
+    subpath: "frame-guards",
+    srcFile: "frame-guards.ts",
+    distFile: "frame-guards.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
     subpath: "schema",
     srcFile: "schema.ts",
     distFile: "schema.mjs",
@@ -818,6 +825,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     distFile: "utf16-slice.mjs",
   },
   {
+    packageName: "@openclaw/retry",
+    packageDir: "retry",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
     packageName: "@openclaw/terminal-core",
     packageDir: "terminal-core",
     subpath: "",
@@ -1046,6 +1060,7 @@ const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "acp-core",
   "media-core",
   "normalization-core",
+  "retry",
   "terminal-core",
 ]);
 

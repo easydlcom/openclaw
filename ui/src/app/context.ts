@@ -32,8 +32,8 @@ export type ApplicationTheme = {
 
 export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
+  navWidth: number;
   sidebarPinnedRoutes: readonly SidebarNavRoute[];
-  sidebarMoreExpanded: boolean;
 };
 
 export type ApplicationNavigationPreferences = {
@@ -44,7 +44,7 @@ export type ApplicationNavigationPreferences = {
 
 export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
 
-export type SkillWorkshopRevisionHandoff = {
+type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
   proposalId: string;

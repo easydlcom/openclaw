@@ -15,12 +15,14 @@ import {
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { toErrorObject } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
+import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
@@ -124,7 +126,7 @@ function sanitizeFilename(name: string): string {
   }
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   // Collapse multiple underscores, trim leading/trailing, limit length
-  return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
+  return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
 /** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */
@@ -174,21 +176,26 @@ function isMissingPathError(err: unknown): boolean {
 }
 
 async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (err) {
-    const noSpaceError = findErrorWithCode(err, "ENOSPC");
-    if (noSpaceError) {
-      throw noSpaceError;
-    }
-    if (!isMissingPathError(err)) {
-      throw err;
-    }
-    // Recursive cleanup can prune an empty directory between mkdir and the later
-    // file open/write. Recreate once and retry the media write path.
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    return await run();
-  }
+  return await retryAsync(
+    async () => {
+      try {
+        return await run();
+      } catch (err) {
+        throw findErrorWithCode(err, "ENOSPC") ?? err;
+      }
+    },
+    {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+      shouldRetry: isMissingPathError,
+      onRetry: async () => {
+        // Cleanup can prune the directory between mkdir and file open. Recreate
+        // it once; further failures remain terminal instead of looping.
+        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      },
+    },
+  );
 }
 
 // Maps the cleanup mode onto the prune sweep depth. The fs-safe prune walker keys descent off

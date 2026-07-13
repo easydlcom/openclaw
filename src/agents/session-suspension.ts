@@ -7,7 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
-import { applySessionStoreEntryPatch } from "../config/sessions.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -21,7 +21,7 @@ import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 const log = createSubsystemLogger("session-suspension");
 
 const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
-export const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
+const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const deferredSessionSuspension = new AsyncLocalStorage<{
@@ -30,7 +30,7 @@ const deferredSessionSuspension = new AsyncLocalStorage<{
 }>();
 
 export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
-export type SessionSuspensionTarget =
+type SessionSuspensionTarget =
   | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
   | { mode: "suspend" };
 export type SessionSuspensionParams = {
@@ -127,12 +127,9 @@ export async function suspendSession(params: SessionSuspensionParams) {
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
 
   try {
-    await applySessionStoreEntryPatch({
-      storePath,
-      sessionKey,
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      patch: {
+    await patchSessionEntry(
+      { storePath, sessionKey },
+      () => ({
         quotaSuspension: {
           schemaVersion: 1,
           suspendedAt: now,
@@ -144,8 +141,9 @@ export async function suspendSession(params: SessionSuspensionParams) {
           expectedResumeBy,
           state: "suspended",
         },
-      },
-    });
+      }),
+      { skipMaintenance: true, takeCacheOwnership: true },
+    );
   } catch (err) {
     log.warn("failed to persist quota suspension; not throttling lane", {
       sessionId: params.sessionId,
@@ -169,4 +167,3 @@ export const testing = {
   resolveLaneResumeConcurrency,
   resolveSessionSuspensionReason,
 } as const;
-export { testing as __testing };

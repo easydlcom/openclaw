@@ -111,6 +111,12 @@ export async function startGatewayEarlyRuntime(params: {
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
+  if (!params.minimalTestGateway) {
+    await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
+      const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
+      ensureTaskRuntimeStateReady();
+    });
+  }
   const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
     startGatewayPluginDiscovery(params),
   );
@@ -197,6 +203,7 @@ export async function startGatewayEarlyRuntime(params: {
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
           : {}),
