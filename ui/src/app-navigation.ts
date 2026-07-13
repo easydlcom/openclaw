@@ -72,65 +72,6 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
-// Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
-// Session management lives in Settings (SETTINGS_NAVIGATION_GROUPS below).
-export const SIDEBAR_NAV_ROUTES = [
-  "workboard",
-  "usage",
-  "cron",
-  "tasks",
-  "agents",
-  "plugins",
-] as const satisfies readonly NavigationRouteId[];
-
-// Routes presented as tabs of the Plugins hub. The sidebar highlights the
-// Plugins entry for all of them, mirroring how config covers settings routes.
-const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
-  "plugins",
-  "skills",
-  "skill-workshop",
-]);
-
-export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
-  return PLUGINS_HUB_ROUTES.has(routeId);
-}
-
-export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
-
-// Keep the highest-value operational destinations visible on first use. Users
-// can still replace this set through the customize menu.
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "usage",
-  "cron",
-  "plugins",
-] as const satisfies readonly SidebarNavRoute[];
-
-/**
- * Normalize a persisted pinned-route list. Returns null when the value is not a
- * list (caller falls back to defaults); unknown or duplicate entries are dropped
- * so prefs survive route renames/removals without a migration.
- */
-export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  const pinned: SidebarNavRoute[] = [];
-  for (const entry of value) {
-    if (
-      typeof entry === "string" &&
-      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
-      !pinned.includes(entry as SidebarNavRoute)
-    ) {
-      pinned.push(entry as SidebarNavRoute);
-    }
-  }
-  return pinned;
-}
-
-export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
-}
-
 type SettingsNavigationGroup = {
   /** i18n key for the group heading; null renders the group without a label. */
   labelKey: string | null;
@@ -291,6 +232,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
+  worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
   connection: { titleKey: "tabs.connection", subtitleKey: "subtitles.connection" },
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
