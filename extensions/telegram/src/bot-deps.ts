@@ -7,9 +7,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   readChannelAllowFromStore,
-  addChannelAllowFromStoreEntry,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import {
   recordInboundSession,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -46,7 +43,6 @@ export type TelegramBotDeps = {
   resolveStorePath: typeof resolveStorePath;
   getSessionEntry?: typeof getSessionEntry;
   listSessionEntries?: typeof listSessionEntries;
-  addChannelAllowFromStoreEntry: typeof addChannelAllowFromStoreEntry;
   readSessionUpdatedAt?: typeof readSessionUpdatedAt;
   readAmbientTranscriptWatermark?: typeof readAmbientTranscriptWatermark;
   resolveAmbientTranscriptWatermarkKey?: typeof resolveAmbientTranscriptWatermarkKey;
@@ -81,9 +77,6 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get resolveStorePath() {
     return resolveStorePath;
-  },
-  get addChannelAllowFromStoreEntry() {
-    return addChannelAllowFromStoreEntry;
   },
   get getSessionEntry() {
     return getSessionEntry;

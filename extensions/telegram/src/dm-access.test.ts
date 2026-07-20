@@ -16,6 +16,7 @@ const createPairingPrefixStripperMock = vi.hoisted(
 );
 
 vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
+  addChannelAllowFromStoreEntry: addChannelAllowFromStoreEntryMock,
   createChannelPairingChallengeIssuer: createChannelPairingChallengeIssuerMock,
   createPairingPrefixStripper: createPairingPrefixStripperMock,
   createLoggedPairingApprovalNotifier: () => undefined,
@@ -24,7 +25,6 @@ vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  addChannelAllowFromStoreEntry: addChannelAllowFromStoreEntryMock,
   upsertChannelPairingRequest: upsertChannelPairingRequestMock,
   createStaticReplyToModeResolver: (mode: string) => () => mode,
   createTopLevelChannelReplyToModeResolver: () => () => "off",
@@ -163,7 +163,6 @@ describe("enforceTelegramDmAccess", () => {
       accountId: "main",
       bot: { api: { sendMessage } } as never,
       logger: { info: vi.fn() },
-      addAllowFromStoreEntry: addChannelAllowFromStoreEntryMock,
       upsertPairingRequest: upsertChannelPairingRequestMock,
     });
 
@@ -201,7 +200,6 @@ describe("enforceTelegramDmAccess", () => {
       accountId: "main",
       bot: { api: { sendMessage: vi.fn(async () => undefined) } } as never,
       logger: { info: vi.fn() },
-      addAllowFromStoreEntry: addChannelAllowFromStoreEntryMock,
       upsertPairingRequest: upsertChannelPairingRequestMock,
     });
 
@@ -232,7 +230,6 @@ describe("enforceTelegramDmAccess", () => {
       accountId: "main",
       bot: { api: { sendMessage } } as never,
       logger,
-      addAllowFromStoreEntry: addChannelAllowFromStoreEntryMock,
       upsertPairingRequest: upsertChannelPairingRequestMock,
     });
 

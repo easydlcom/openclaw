@@ -137,7 +137,6 @@ export const buildTelegramMessageContext = async ({
   resolveGroupActivation,
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
-  addChannelAllowFromStoreEntry,
   runtime,
   sessionRuntime,
   upsertPairingRequest,
@@ -359,7 +358,6 @@ export const buildTelegramMessageContext = async ({
       accountId: account.accountId,
       bot,
       logger,
-      addAllowFromStoreEntry: addChannelAllowFromStoreEntry,
       upsertPairingRequest,
     }))
   ) {

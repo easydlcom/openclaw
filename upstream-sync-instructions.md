@@ -28,7 +28,7 @@
 - GitHub workflows：优先吸收 upstream 的 workflow 逻辑，但在发生冲突时保留本 fork 对 `workflow_dispatch` 的偏好，因为本 fork 主要依赖手动触发和自定义 Docker 发布流程。
 - `Dockerfile`：保留本 fork 的 wrapper 与 `entrypoint.sh` 部署/运行模型，同时尽量吸收 upstream 的构建阶段加固与兼容性修复。
 - Gateway 启动流程：保留本地 `AGENT_GATEWAY_READY_NOTIFY_URL` ready 通知行为，同时尽量兼容 upstream 的启动与 update-check 结构。
-- Telegram：保留本 fork 的“首个私聊发送者自动加入 allowlist”行为，但在同步时优先把该能力移植到 upstream 的访问控制结构与测试里，而不是简单整文件回退。
+- Telegram：保留本 fork 的“首个私聊发送者自动加入 allowlist、成为全局 owner，并立即放行该首条消息”行为。该定制应只保留在 DM 访问控制接入点；同步时优先移植 `dm-access.ts` 的局部分支和定向测试，不能恢复过去跨 bot deps、消息上下文、处理器和测试 harness 的依赖透传。
 - system prompt：保留 `buildValueFirstResponseSection()` 以及相关文档和测试约束。
 - 如果 upstream 删除了某个文件，而本 fork 当前也不再依赖它，则接受 upstream 的删除。
 - README.md 总是保留fork版本，不被上游内容覆盖。
@@ -142,94 +142,35 @@
   - 明确要求当用户提到工具、数据源、系统时，先解释价值，再给下一步操作。
   - 说明 sub-agent / minimal prompt 仍然保留这条策略。
 
-### 3. `extensions/telegram/src/bot-access.ts`
+### 3. `extensions/telegram/src/dm-access.ts`
 
-- 差异摘要：移除了 allowlist 为空时立即返回“不允许”的早退逻辑。
-- 修改目的：为“首个私聊用户自动加入 allowlist”留出后续处理空间。
+- 差异摘要：在 Telegram DM 访问控制接入点新增首个发送者 bootstrap 分支；不再通过 bot deps、消息上下文、消息处理器或测试 harness 透传 allowlist 写入依赖。
+- 修改目的：托管平台无法预先取得租户 Telegram ID，也不提供终端执行 owner 配置命令；首位私聊用户必须能立即完成实例初始化，同时将 fork 改动收敛到单一上游冲突面。
 - 涉及功能 / 行为变化：
-  - 当 `allowFrom` 为空时，不再在这里直接判死；后续流程可以继续判断是否触发自动加白或配对逻辑。
+  - 仅在私聊、`dmPolicy === "pairing"` 且有效 Telegram allowlist 为空时触发。
+  - 将首个发送者写入 Telegram channel allowlist store，并把 `telegram:<userId>` 追加到 `commands.ownerAllowFrom`（已有相同项时不重复写入）。
+  - 持久化成功后立即放行触发 bootstrap 的首条 DM，不发送 pairing code；该用户因此获得 owner-only 命令、工具和 Telegram 原生执行审批相关权限。
+  - 自动写入任一步失败时记录日志并继续原有 pairing 流程，不放宽已有 allowlist 的未授权发送者。
+  - 调用 focused Plugin SDK `channel-pairing` 子路径的 allowlist writer；不得恢复到已收窄的 `conversation-runtime` barrel，或恢复旧的跨层依赖注入。
 
-### 4. `extensions/telegram/src/bot-deps.ts`
+### 4. `extensions/telegram/src/dm-access.test.ts`
 
-- 差异摘要：新增 `addChannelAllowFromStoreEntry` 依赖，并注入默认实现。
-- 修改目的：让 Telegram runtime 可以把用户动态写入 channel allowlist store。
+- 差异摘要：为局部 bootstrap 分支提供定向测试，测试直接 mock `channel-pairing` 的 allowlist writer。
+- 修改目的：将行为证明与实现接入点保持一致，避免 bot 集成测试和 test harness 承担首个 DM bootstrap 的专用依赖。
 - 涉及功能 / 行为变化：
-  - Telegram bot 运行期现在有能力直接追加 allowlist 项，而不只是读取 allowlist 或发起 pairing。
+  - 覆盖空 allowlist + `pairing` 时写入 allowlist、追加 owner 并立即放行。
+  - 覆盖已有 owner 项不重复写入，以及非空 allowlist 的未授权发送者仍走 pairing challenge。
 
-### 5. `extensions/telegram/src/bot-handlers.runtime.ts`
+### 5. `src/plugin-sdk/channel-pairing.ts`
 
-- 差异摘要：调用私聊访问控制时，新增传入 `addAllowFromStoreEntry`。
-- 修改目的：把新的动态加白能力接进真正的消息处理链路。
+- 差异摘要：从 focused `channel-pairing` Plugin SDK 子路径导出 `addChannelAllowFromStoreEntry`。
+- 修改目的：让 Telegram DM 访问控制只依赖与 pairing 相关的公开 SDK 契约，不扩大废弃且已收窄的 `conversation-runtime` barrel。
 - 涉及功能 / 行为变化：
-  - DM 访问控制不再只是“放行 / pairing challenge”，还可能直接把用户写入 allowlist。
-
-### 6. `extensions/telegram/src/bot-message-context.ts`
-
-- 差异摘要：构造 Telegram 消息上下文时，多传递了 `addChannelAllowFromStoreEntry`。
-- 修改目的：让消息上下文层也能参与新的私聊访问控制策略。
-- 涉及功能 / 行为变化：
-  - 私聊首发用户的自动加白逻辑可以在上下文构建阶段生效。
-
-### 7. `extensions/telegram/src/bot-message-context.types.ts`
-
-- 差异摘要：为消息上下文构建参数增加 `addChannelAllowFromStoreEntry` 类型声明。
-- 修改目的：补齐上面运行时改动对应的类型契约。
-- 涉及功能 / 行为变化：
-  - TypeScript 层面承认 Telegram 消息上下文构建器可选接收动态加白函数。
-
-### 8. `extensions/telegram/src/bot-message.ts`
-
-- 差异摘要：创建 Telegram message processor 时，向上下文构建传入 `addChannelAllowFromStoreEntry`。
-- 修改目的：把依赖从 bot deps 继续透传到 message processor。
-- 涉及功能 / 行为变化：
-  - 首个私聊用户自动加白的能力贯通到消息处理入口。
-
-### 9. `extensions/telegram/src/bot.create-telegram-bot.test-harness.ts`
-
-- 差异摘要：测试桩里增加了 `addChannelAllowFromStoreEntry` mock、导出 getter，并在 `telegramBotDepsForTest` 中接入。
-- 修改目的：支撑新的 Telegram DM 自动加白测试场景。
-- 涉及功能 / 行为变化：
-  - 测试环境可以断言是否发生了 allowlist 写入。
-  - `beforeEach` 会重置并设置该 mock 的默认返回值。
-
-### 10. `extensions/telegram/src/bot.test.ts`
-
-- 差异摘要：新增多条 Telegram 行为测试，同时调整了部分既有测试输入。
-- 修改目的：覆盖本 fork 新增的 DM 自动加白、typing cue 和群聊 mention pattern 行为。
-- 涉及功能 / 行为变化：
-  - 新增“当 DM allowlist 为空时，首个私聊发送者自动加白”的测试。
-  - 新增“自动加白后不再发送 pairing code”的测试。
-  - 新增“回复开始时发送 typing 动作”的测试。
-  - 新增“群聊中通过 mentionPatterns 命中，即使没有 `@botUsername` 也能接受消息”的测试。
-  - 某些场景下的 allowlist 初始值从空数组改成已有用户，以区分自动加白和正常 pairing 行为。
-
-### 11. `extensions/telegram/src/dm-access.test.ts`
-
-- 差异摘要：测试从“allowlist 为空时触发 pairing”改为区分两种情况：空 allowlist 自动加白并自动写入 owner；已有 allowlist 才触发 pairing。
-- 修改目的：把新的私聊访问控制策略表达清楚，并覆盖“首个私聊发送者自动成为 owner”的 fork 定制行为。
-- 涉及功能 / 行为变化：
-  - 空 allowlist + `pairing` 策略时，首个 DM 发送者会被直接写入 allowlist 并放行。
-  - 同一场景下，还会将 `telegram:<userId>` 追加写入 `commands.ownerAllowFrom`。
-  - 若 `commands.ownerAllowFrom` 已包含相同 `telegram:<userId>`，则不会重复写入。
-  - 非空 allowlist + `pairing` 策略时，未授权用户仍然收到 pairing challenge。
-
-### 12. `extensions/telegram/src/dm-access.ts`
-
-- 差异摘要：在 `pairing` 模式下新增“当 allowlist 为空时自动把首个私聊发送者加入 allowlist，并同时写入 owner 配置”的分支。
-- 修改目的：优化 bot 首次配置后的可用性，避免第一位管理员也被卡在 pairing 流程里，同时让首个私聊发送者立即具备 owner-only tool 权限。
-- 涉及功能 / 行为变化：
-  - 私聊且 `dmPolicy === "pairing"` 且 allowlist 为空时：
-  - 读取发送者 Telegram user id。
-  - 写入 channel allowlist store。
-  - 读取当前配置并将 `telegram:<userId>` 追加到 `commands.ownerAllowFrom`（若尚不存在）。
-  - 记录 owner 自动写入成功日志。
-  - 记录日志。
-  - 直接放行，不发 pairing code。
-  - 如果 allowlist 自动写入失败，则继续走原有 pairing 逻辑。
-  - 如果 owner 配置写入失败，不影响当前首个 DM 放行主路径，但会落日志便于排查。
+  - Telegram 插件可在其 DM access gate 中写入 pairing allowlist store。
+  - 后续同步应保留这个 focused export；不要将 writer 重新导出到 `conversation-runtime`。
 
 
-### 14. `extensions/telegram/src/monitor.ts`
+### 6. `extensions/telegram/src/monitor.ts`
 
 - 差异摘要：Telegram monitor 在 polling 模式下新增接入 `getUpdates conflict` owner 告警器。
 - 修改目的：把冲突告警挂在启动监控与 polling session 的装配层，尽量局部化改动，降低后续同步 upstream 的冲突范围。
@@ -237,7 +178,7 @@
   - 为每个 Telegram account 创建独立的 conflict alerter。
   - 在不改变原有 polling 重试结构的前提下，把 owner 通知能力以回调形式注入 polling session。
 
-### 15. `extensions/telegram/src/polling-session.ts`
+### 7. `extensions/telegram/src/polling-session.ts`
 
 - 差异摘要：在识别到 Telegram `getUpdates conflict` 时，除原有日志和重试外，新增触发 owner 通知。
 - 修改目的：让该类冲突从“仅后端可见”变成“owner 可直接收到 Telegram 告警”，同时保持核心 polling 逻辑改动最小。
@@ -245,7 +186,7 @@
   - `409 getUpdates conflict` 分支会调用独立注入的通知函数。
   - 通知失败不会中断原有冲突恢复流程，仍继续保留日志与自动重试。
 
-### 16. `extensions/telegram/src/polling-conflict-alert.test.ts`
+### 8. `extensions/telegram/src/polling-conflict-alert.test.ts`
 
 - 差异摘要：新增针对 Telegram polling 冲突 owner 告警器的定向测试。
 - 修改目的：为 fork 新增的 owner 告警行为提供独立测试覆盖，减少将来同步时回归风险。
@@ -254,21 +195,21 @@
   - 覆盖冷却窗口内抑制重复告警。
   - 覆盖无法解析 owner 时仅记录日志、不发送消息。
 
-### 17. `src/agents/pi-embedded-helpers/errors.ts`
+### 9. `src/agents/pi-embedded-helpers/errors.ts`
 
 - 差异摘要：rate limit 用户提示从通用“稍后重试”改成引导用户添加 / 切换 API key。
 - 修改目的：把“额度 / 限流”问题引导到本 fork 希望的商业或 BYOK 流程上。
 - 涉及功能 / 行为变化：
   - 用户看到限流提示时，会被引导到 `getclawcloud.com` 的 API key 页面，而不是单纯等待。
 
-### 18. `src/agents/system-prompt.test.ts`
+### 10. `src/agents/system-prompt.test.ts`
 
 - 差异摘要：测试新增对 “Value-First Response Strategy” 段落的断言。
 - 修改目的：确保系统提示词确实包含 fork 自己加的回复策略。
 - 涉及功能 / 行为变化：
   - minimal prompt 和完整 prompt 的测试都要求出现这段策略内容。
 
-### 19. `src/agents/system-prompt.ts`
+### 11. `src/agents/system-prompt.ts`
 
 - 差异摘要：新增 `buildValueFirstResponseSection()`，并把该 section 注入系统提示词；同时把原先工具调用风格 fallback 里的标题行去掉。
 - 修改目的：改变助手在“提到外部工具 / 系统”场景下的默认表达顺序，让回答更偏产品导向。
@@ -277,14 +218,14 @@
   - minimal / sub-agent prompt 也会带上这条策略。
   - prompt 结构略有变化，工具调用风格部分的标题层级减少一层。
 
-### 20. `src/agents/workspace.defaults.test.ts`
+### 12. `src/agents/workspace.defaults.test.ts`
 
 - 差异摘要：新增测试，断言显式设置 `OPENCLAW_WORKSPACE_DIR` 时优先使用它。
 - 修改目的：覆盖 fork 对 workspace 路径解析的自定义环境变量行为。
 - 涉及功能 / 行为变化：
   - 测试确认 `OPENCLAW_HOME` / `HOME` 不再总是优先，显式 workspace 路径会覆盖默认推导。
 
-### 21. `src/agents/workspace.ts`
+### 13. `src/agents/workspace.ts`
 
 - 差异摘要：默认 workspace 目录解析逻辑新增 `OPENCLAW_WORKSPACE_DIR` / `CLAWDBOT_WORKSPACE_DIR` 覆盖项；首启 bootstrap 改为支持通过 `TEMPLATE_TASK_ID` 选择模板来源，但实际仍只落地为一次性的 `BOOTSTRAP.md`。
 - 修改目的：让容器部署可以稳定指定 workspace 位置，不依赖 home 目录规则；同时为首次会话保留现有 `BOOTSTRAP.md` 状态机与一次性执行语义，并允许按环境变量切换默认任务模板。
@@ -295,14 +236,14 @@
   - 若未设置 `TEMPLATE_TASK_ID`，或对应模板不存在，则回退到默认 [`BOOTSTRAP.md`](docs/reference/templates/BOOTSTRAP.md)。
   - workspace 状态文件新增可选 `bootstrapTemplateId` 记录首启时使用的模板来源，但是否重跑仍只由既有 `bootstrapSeededAt` / `setupCompletedAt` 语义决定。
 
-### 22. `src/dockerfile.test.ts`
+### 14. `src/dockerfile.test.ts`
 
 - 差异摘要：测试中的 Playwright CLI 路径断言跟随 Dockerfile 一起改成 `/openclaw/node_modules/...`。
 - 修改目的：保持测试与新的镜像布局一致。
 - 涉及功能 / 行为变化：
   - Dockerfile 测试基线更新为 wrapper 改造后的镜像目录结构。
 
-### 23. `src/gateway/net.ts`
+### 15. `src/gateway/net.ts`
 
 - 差异摘要：当 bind mode 为 `loopback` 时，不再在 127.0.0.1 不可绑定时回退到 `0.0.0.0`。
 - 修改目的：强化“loopback 就必须只绑定本机”的安全语义，避免意外对外暴露。
@@ -310,7 +251,7 @@
   - `loopback` 模式现在始终返回 `127.0.0.1`。
   - 去掉极端情况下自动退化为 LAN 监听的行为。
 
-### 24. `docs/reference/templates/BOOTSTRAP.md`
+### 16. `docs/reference/templates/BOOTSTRAP.md`
 
 - 差异摘要：将首启 bootstrap 模板从 identity-first / persona-first 改为 task-first，并把它保留为 `TEMPLATE_TASK_ID` 未命中时的默认回退模板。
 - 修改目的：避免用户首次连上实例或首次通过 Telegram 等入口开始对话时，被冗长的人格配置问卷打断，优先让用户进入“任务态”；同时作为可选模板机制下的稳定默认值。
@@ -322,7 +263,7 @@
   - 删除 `BOOTSTRAP.md` 的条件放宽为“用户已进入正常任务对话”，而不是必须先完整做完人格配置。
   - 当 `TEMPLATE_TASK_ID` 未设置或对应模板缺失时，首次会话仍继续使用这份默认模板。
 
-### 25. `src/agents/workspace.test.ts`
+### 17. `src/agents/workspace.test.ts`
 
 - 差异摘要：为 bootstrap 模板选择逻辑新增定向测试。
 - 修改目的：防止后续同步 upstream 或重构 workspace 初始化时，误破坏 `TEMPLATE_TASK_ID` 模板选择、默认回退与只执行一次的既有行为。
@@ -332,7 +273,7 @@
   - 测试覆盖 bootstrap 删除后不会因再次运行而重 seed，自定义模板也只执行一次。
   - 测试覆盖模板不存在时会回退到默认 [`BOOTSTRAP.md`](docs/reference/templates/BOOTSTRAP.md)。
 
-### 26. `docs/reference/templates/BOOTSTRAP.template_task_1.md`
+### 18. `docs/reference/templates/BOOTSTRAP.template_task_1.md`
 
 - 差异摘要：新增首会话模板 `template_task_1`。
 - 修改目的：支持通过 `TEMPLATE_TASK_ID=template_task_1` 将首次 bootstrap 任务切换为“AI / SaaS founder outreach”。
@@ -340,7 +281,7 @@
   - 首次会话任务改为查找 5 位 AI / SaaS 创业者并生成个性化 outreach 文案。
   - 保留强制追加 daily task CTA 文案的要求。
 
-### 27. `docs/reference/templates/BOOTSTRAP.template_task_2.md`
+### 19. `docs/reference/templates/BOOTSTRAP.template_task_2.md`
 
 - 差异摘要：新增首会话模板 `template_task_2`。
 - 修改目的：支持通过 `TEMPLATE_TASK_ID=template_task_2` 将首次 bootstrap 任务切换为“Hacker News 热门总结”。
@@ -348,7 +289,7 @@
   - 首次会话任务改为总结当天 5 条 Hacker News 热门内容，并提炼趋势与 builder insight。
   - 保留强制追加 daily task CTA 文案的要求。
 
-### 28. `docs/reference/templates/BOOTSTRAP.template_task_3.md`
+### 20. `docs/reference/templates/BOOTSTRAP.template_task_3.md`
 
 - 差异摘要：新增首会话模板 `template_task_3`。
 - 修改目的：支持通过 `TEMPLATE_TASK_ID=template_task_3` 将首次 bootstrap 任务切换为“Singapore AI startups 调研 + CSV 上传”。
@@ -357,7 +298,7 @@
   - 上传失败时会按模板要求依次尝试两个上传端点，若都失败则报告错误。
   - 保留强制追加 daily task CTA 文案的要求。
 
-### 29. `apps/macos/Sources/OpenClaw/OnboardingView+Chat.swift`
+### 21. `apps/macos/Sources/OpenClaw/OnboardingView+Chat.swift`
 
 - 差异摘要：macOS onboarding chat 的 kickoff 文案改为显式要求 task-first bootstrap。
 - 修改目的：让应用侧自动发出的首条引导消息与 fork 的 task-first bootstrap 语义保持一致，避免仍旧把用户导向先配置 `SOUL.md` / persona。
@@ -366,7 +307,7 @@
   - 改为明确提示 agent 按 `BOOTSTRAP.md` 进入 task-first 模式。
   - 明确给出首句和示例方向，要求先帮助用户完成任务，再在需要时补做 identity / `SOUL.md` 个性化。
 
-### 30. `docs/start/bootstrapping.md`
+### 22. `docs/start/bootstrapping.md`
 
 - 差异摘要：启动文档同步更新为 task-first bootstrap 描述。
 - 修改目的：让文档对首次启动体验的描述与 fork 的实际行为一致，避免保留 upstream 或旧版本的人格优先叙述。
@@ -375,7 +316,7 @@
   - 改为说明首次启动先用简短 task-first 提示让用户直接提需求。
   - 身份与偏好信息采集改为在后续有用时再写入 `IDENTITY.md`、`USER.md`、`SOUL.md`。
 
-### 31. `src/gateway/config-reload-plan.ts`
+### 23. `src/gateway/config-reload-plan.ts`
 
 - 差异摘要：为 `commands.ownerAllowFrom` 新增更具体的 reload 规则，避免其命中更泛化的 `commands` restart 路径。
 - 修改目的：配合 Telegram “首个私聊发送者自动成为 owner” 的 fork 行为，避免自动写入 `commands.ownerAllowFrom` 时触发整个 gateway SIGUSR1 重启，打断进行中的 bootstrap / 首任务流程。
@@ -384,7 +325,7 @@
   - 后续消息仍会基于最新配置动态读取 owner allowlist 生效。
   - 不再因为 owner allowlist 自动写入而触发 gateway restart。
 
-### 31. `src/config/io.ts`
+### 24. `src/config/io.ts`
 
 - 差异摘要：补充导入 `sanitizeTerminalText`，修复配置 warning 格式化路径中的运行时 `ReferenceError`。
 - 修改目的：修复 upstream 当前实现中的缺失导入问题，避免当配置包含 warning（例如禁用插件仍保留配置项）时，gateway 在 reload / restart / CLI 启动阶段因为打印 warning 而崩溃。
@@ -393,7 +334,7 @@
   - bot 或其他外部流程修改配置后，若触发 gateway reload 且配置仅包含 warning，不会再把 warning 误升级为致命启动错误。
   - 该修复属于 fork 需要保留的上游 bugfix，同步 upstream 时若冲突应保留其语义，除非 upstream 已以等效方式修复。
 
-### 32. `entrypoint.sh`
+### 25. `entrypoint.sh`
 
 - 差异摘要：在现有启动校验与恢复逻辑基础上，新增“成功验证后刷新 `.bak` 基线”的行为。
 - 修改目的：保证容器每次成功启动或恢复后，`${OPENCLAW_CONFIG_PATH}.bak` 都指向最近一次已验证有效的配置，即使此前配置曾被外部直接改写。
@@ -402,7 +343,7 @@
   - 当入口脚本从 `.bak` 恢复成功后，会再次刷新 `.bak`，确保恢复基线与当前有效配置一致。
   - 该逻辑是恢复机制的补强层，不改变已有 `overwrite-defaults` / `update-llm-only` 主流程。
 
-### 33. `src/gateway/config-reload.ts`
+### 26. `src/gateway/config-reload.ts`
 
 - 差异摘要：gateway 配置热重载器新增一个可选回调，仅在“外部文件变更且快照校验有效”时执行附加动作。
 - 修改目的：把“外部有效配置变更后刷新 `.bak`”的行为隔离成可注入回调，减少直接侵入 reload 核心流程，降低后续同步冲突。
@@ -410,7 +351,7 @@
   - 对受控内部写入通知维持原行为，不额外刷新 `.bak`，避免破坏既有备份轮转语义。
   - 对 watcher 检测到的外部文件变更，在确认配置有效后可执行备份基线刷新。
 
-### 34. `src/gateway/server.impl.ts`
+### 27. `src/gateway/server.impl.ts`
 
 - 差异摘要：gateway 启动时为配置热重载器注入“外部有效配置变更后刷新 `.bak`”的回调。
 - 修改目的：让 bot 或其他外部流程直接编辑 `/data/openclaw.json` 后，只要配置仍然有效，就能自动建立新的恢复基线。
@@ -418,6 +359,6 @@
   - 当 watcher 检测到有效的外部配置变更时，会把当前 `openclaw.json` 同步到 `.bak`。
   - 对内部受控写入不触发该同步，继续保留 upstream / 现有 fork 的备份轮转行为。
 
-### 31. `README.md`
+### 28. `README.md`
 
 - 差异摘要：README 修改为getclawcloud版本。总是保持当前内容，不同步上游变更

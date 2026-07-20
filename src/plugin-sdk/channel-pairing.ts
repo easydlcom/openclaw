@@ -6,6 +6,7 @@ export {
   createTextPairingAdapter,
 } from "../channels/plugins/pairing-adapters.js";
 export {
+  addChannelAllowFromStoreEntry,
   readChannelAllowFromStore,
   readChannelAllowFromStoreSync,
 } from "../pairing/pairing-store.js";

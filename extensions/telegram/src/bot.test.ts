@@ -116,7 +116,6 @@ const {
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
-  getAddChannelAllowFromStoreEntryMock,
   getFileSpy,
   getChatSpy,
   getLoadConfigMock,
@@ -148,7 +147,6 @@ const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
-const addChannelAllowFromStoreEntry = getAddChannelAllowFromStoreEntryMock();
 const PUZZLE_EMOJI = "\u{1F9E9}";
 const INFO_EMOJI = "\u{2139}\u{FE0F}";
 const CHECK_MARK_EMOJI = "\u{2705}";
@@ -2577,78 +2575,6 @@ describe("createTelegramBot", () => {
     } finally {
       await rm(storePath, { force: true });
     }
-  });
-
-  it("auto-allowlists first DM sender when allowlist is empty", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
-
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    addChannelAllowFromStoreEntry.mockResolvedValue({ changed: true, allowFrom: ["999"] });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 1234, type: "private" },
-        text: "hello",
-        date: 1736380800,
-        from: { id: 999, username: "random" },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(sendMessageSpy).not.toHaveBeenCalled();
-    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
-    expect(addChannelAllowFromStoreEntry).toHaveBeenCalledWith({
-      channel: "telegram",
-      entry: "999",
-      accountId: "default",
-    });
-    expect(replySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not send pairing code after auto-allowlisting first sender", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
-
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    addChannelAllowFromStoreEntry.mockResolvedValue({ changed: true, allowFrom: ["999"] });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    const message = {
-      chat: { id: 1234, type: "private" },
-      text: "hello",
-      date: 1736380800,
-      from: { id: 999, username: "random" },
-    };
-
-    await handler({
-      message,
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-    await handler({
-      message: { ...message, text: "hello again", message_id: 2 },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(sendMessageSpy).not.toHaveBeenCalled();
-    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
-    expect(replySpy).toHaveBeenCalledTimes(2);
   });
 
   it("triggers typing cue via onReplyStart", async () => {

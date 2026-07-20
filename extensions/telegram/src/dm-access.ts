@@ -1,12 +1,12 @@
 // Telegram plugin module implements dm access behavior.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
-import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import {
   addChannelAllowFromStoreEntry,
-  upsertChannelPairingRequest,
-} from "openclaw/plugin-sdk/conversation-runtime";
+  createChannelPairingChallengeIssuer,
+} from "openclaw/plugin-sdk/channel-pairing";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   readConfigFileSnapshotForWrite,
   type OpenClawConfig,
@@ -136,7 +136,6 @@ export async function enforceTelegramDmAccess(params: {
   accountId: string;
   bot: Bot;
   logger: TelegramDmAccessLogger;
-  addAllowFromStoreEntry?: typeof addChannelAllowFromStoreEntry;
   upsertPairingRequest?: typeof upsertChannelPairingRequest;
 }): Promise<boolean> {
   const {
@@ -148,7 +147,6 @@ export async function enforceTelegramDmAccess(params: {
     accountId,
     bot,
     logger,
-    addAllowFromStoreEntry,
     upsertPairingRequest,
   } = params;
   if (isGroup) {
@@ -164,7 +162,7 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "pairing" && !effectiveDmAllow.hasEntries) {
     try {
       const telegramUserId = sender.userId ?? sender.candidateId;
-      await (addAllowFromStoreEntry ?? addChannelAllowFromStoreEntry)({
+      await addChannelAllowFromStoreEntry({
         channel: "telegram",
         entry: telegramUserId,
         accountId,

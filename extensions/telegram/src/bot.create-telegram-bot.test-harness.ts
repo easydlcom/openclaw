@@ -118,16 +118,11 @@ export function setSessionStoreEntriesForTest(entries: SessionStore) {
   sessionStoreEntries.value = structuredClone(entries);
 }
 
-const { addChannelAllowFromStoreEntry, readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(
+const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(
   (): {
-    addChannelAllowFromStoreEntry: MockFn<TelegramBotDeps["addChannelAllowFromStoreEntry"]>;
     readChannelAllowFromStore: MockFn<TelegramBotDeps["readChannelAllowFromStore"]>;
     upsertChannelPairingRequest: MockFn<TelegramBotDeps["upsertChannelPairingRequest"]>;
   } => ({
-    addChannelAllowFromStoreEntry: vi.fn(async () => ({
-      changed: true,
-      allowFrom: [] as string[],
-    })),
     readChannelAllowFromStore: vi.fn(async () => [] as string[]),
     upsertChannelPairingRequest: vi.fn(async () => ({
       code: "PAIRCODE",
@@ -135,10 +130,6 @@ const { addChannelAllowFromStoreEntry, readChannelAllowFromStore, upsertChannelP
     })),
   }),
 );
-
-export function getAddChannelAllowFromStoreEntryMock(): AnyAsyncMock {
-  return addChannelAllowFromStoreEntry;
-}
 
 export function getReadChannelAllowFromStoreMock(): MockFn<
   TelegramBotDeps["readChannelAllowFromStore"]
@@ -512,8 +503,6 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   getSessionEntry: getSessionEntryMock,
   listSessionEntries: listSessionEntriesMock,
   resolveStorePath: resolveStorePathMock,
-  addChannelAllowFromStoreEntry:
-    addChannelAllowFromStoreEntry as TelegramBotDeps["addChannelAllowFromStoreEntry"],
   readSessionUpdatedAt: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
   recordChannelActivity: vi.fn() as TelegramBotDeps["recordChannelActivity"],
@@ -651,11 +640,6 @@ beforeEach(() => {
   recordInboundSessionMock.mockReset();
   recordInboundSessionMock.mockResolvedValue(undefined);
   loadWebMedia.mockReset();
-  addChannelAllowFromStoreEntry.mockReset();
-  addChannelAllowFromStoreEntry.mockResolvedValue({
-    changed: true,
-    allowFrom: [],
-  } as const);
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);
   upsertChannelPairingRequest.mockReset();

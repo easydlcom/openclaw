@@ -395,7 +395,6 @@ export function createTelegramHandlerAuthorizationRuntime({
               accountId,
               bot,
               logger,
-              addAllowFromStoreEntry: telegramDeps.addChannelAllowFromStoreEntry,
               upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
             })
           : await isTelegramDmAccessAllowed({

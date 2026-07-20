@@ -216,7 +216,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveGroupRequireMention,
       resolveTelegramGroupConfig,
       sendChatActionHandler,
-      addChannelAllowFromStoreEntry: telegramDeps.addChannelAllowFromStoreEntry,
       runtime: contextRuntime,
       sessionRuntime,
       upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
