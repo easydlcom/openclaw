@@ -26,7 +26,7 @@
 以下策略用于补充说明高频、高风险冲突面的处理方式；它们不是完整穷举清单。凡是下文“差异点”章节中已记录、但这里未单列策略的内容，仍然默认按“保留 fork 差异语义”处理。
 
 - GitHub workflows：优先吸收 upstream 的 workflow 逻辑，但在发生冲突时保留本 fork 对 `workflow_dispatch` 的偏好，因为本 fork 主要依赖手动触发和自定义 Docker 发布流程。
-- `Dockerfile`：保留本 fork 的 wrapper 与 `entrypoint.sh` 部署/运行模型，同时尽量吸收 upstream 的构建阶段加固与兼容性修复。
+- `Dockerfile`：保留本 fork 的 wrapper 与 `entrypoint.sh` 部署/运行模型，同时尽量吸收 upstream 的构建阶段加固与兼容性修复。解决构建阶段冲突时，不能只保留 wrapper 末端逻辑而覆盖 upstream 的安装链；必须保留 `pnpm install` / lifecycle 脚本及其间接依赖（当前包括 `scripts/lib/guard-inventory-utils.mjs` 与 `scripts/lib/package-dist-imports.mjs`）的 `COPY`，并核对每个被复制脚本的本地 import 闭包。
 - Gateway 启动流程：保留本地 `AGENT_GATEWAY_READY_NOTIFY_URL` ready 通知行为，同时尽量兼容 upstream 的启动与 update-check 结构。
 - Telegram：保留本 fork 的“首个私聊发送者自动加入 allowlist、成为全局 owner，并立即放行该首条消息”行为。该定制应只保留在 DM 访问控制接入点；同步时优先移植 `dm-access.ts` 的局部分支和定向测试，不能恢复过去跨 bot deps、消息上下文、处理器和测试 harness 的依赖透传。
 - system prompt：保留 `buildValueFirstResponseSection()` 以及相关文档和测试约束。
