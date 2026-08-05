@@ -151,7 +151,7 @@ function resolveConfiguredProvider(params: {
       return { source: "env" };
     }
     throw providerResolutionError({
-      code: "SECRET_PROVIDER_INVALID",
+      code: "SECRET_PROVIDER_NOT_CONFIGURED",
       source: ref.source,
       provider: ref.provider,
       message: `Secret provider "${ref.provider}" is not configured (ref: ${ref.source}:${ref.provider}:${ref.id}).`,
@@ -200,7 +200,6 @@ async function assertSecurePath(params: {
   targetPath: string;
   label: string;
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
   allowReadableByOthers?: boolean;
   allowSymlinkPath?: boolean;
 }): Promise<string> {
@@ -235,10 +234,6 @@ async function assertSecurePath(params: {
       throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
     }
   }
-  if (params.allowInsecurePath) {
-    return effectivePath;
-  }
-
   const perms = await inspectPathPermissions(effectivePath);
   if (!perms.ok) {
     throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
@@ -251,7 +246,7 @@ async function assertSecurePath(params: {
 
   if (process.platform === "win32" && perms.source === "unknown") {
     throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.`,
     );
   }
 
@@ -285,7 +280,7 @@ async function readFileProviderPayload(params: {
         filePath,
         label: `secrets.providers.${params.providerName}.path`,
         io: { maxBytes, timeoutMs },
-        permissions: { allowInsecure: params.providerConfig.allowInsecurePath },
+        permissions: { allowInsecure: false },
       });
       const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {
@@ -518,9 +513,8 @@ async function resolveExecRefs(params: {
       targetPath: commandPath,
       label: `secrets.providers.${params.providerName}.command`,
       trustedDirs: params.providerConfig.trustedDirs,
-      allowInsecurePath: params.providerConfig.allowInsecurePath,
       allowReadableByOthers: true,
-      allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     throwUnknownProviderResolutionError({
@@ -530,12 +524,11 @@ async function resolveExecRefs(params: {
     });
   }
 
-  const requestPayload = {
+  const input = JSON.stringify({
     protocolVersion: 1,
     provider: params.providerName,
     ids,
-  };
-  const input = JSON.stringify(requestPayload);
+  });
   if (Buffer.byteLength(input, "utf8") > params.limits.maxBatchBytes) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",

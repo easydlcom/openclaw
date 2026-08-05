@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
@@ -14,12 +15,12 @@ import {
   getGatewayConfigModule,
   directSessionReq,
   seedLinearSessionTranscript,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayRequestContext } from "./types.js";
 
-setupGatewaySessionsTestHarness();
+setupGatewaySessionsHandlerTestHarness();
 
 const UNKNOWN_AGENT_ID = "ghost";
 const UNKNOWN_SESSION_KEY = `agent:${UNKNOWN_AGENT_ID}:zzz`;
@@ -41,7 +42,10 @@ function expectAgentStoreAbsent(agentId: string): void {
   );
 }
 
-async function listAgentIdsViaRpc(): Promise<string[]> {
+async function listAgentIdsViaRpc(
+  includeSystem = false,
+  catalogContext: Partial<GatewayRequestContext> = {},
+): Promise<string[]> {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   let ids: string[] | undefined;
   await agentsHandlers["agents.list"]?.({
@@ -55,8 +59,12 @@ async function listAgentIdsViaRpc(): Promise<string[]> {
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => [],
+      ...catalogContext,
     } as unknown as GatewayRequestContext,
-    client: null,
+    client: includeSystem
+      ? ({ connect: { caps: [GATEWAY_CLIENT_CAPS.AGENT_KIND] } } as never)
+      : null,
     isWebchatConnect: () => false,
   });
   return ids ?? [];
@@ -68,6 +76,28 @@ async function setAgentsConfig(agentsConfig: Record<string, unknown> | undefined
   clearRuntimeConfigSnapshot();
   clearConfigCache();
 }
+
+test("agents.list includes system rows only when negotiated", async () => {
+  fs.mkdirSync(path.join(requireStateDir(), "agents", "openclaw"), { recursive: true });
+
+  expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+  expect(await listAgentIdsViaRpc(true)).toEqual(["main", "openclaw"]);
+});
+
+test("agents.list reads published model facts without starting provider discovery", async () => {
+  const loadGatewayModelCatalog = vi.fn(async () => []);
+  const readPreparedGatewayModelCatalog = vi.fn(async () => []);
+
+  await expect(
+    listAgentIdsViaRpc(false, {
+      loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog,
+    }),
+  ).resolves.toEqual(["main"]);
+
+  expect(readPreparedGatewayModelCatalog).toHaveBeenCalledWith(undefined);
+  expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+});
 
 beforeEach(async () => {
   testState.sessionStorePath = undefined;
@@ -229,7 +259,7 @@ test.each([
   },
 );
 
-test("sessions.describe reads an unconfigured agent from a fixed legacy store", async () => {
+test("sessions.describe ignores an unconfigured agent found only in a fixed legacy store", async () => {
   const storePath = await configureFixedSessionStore("legacy");
   fs.writeFileSync(
     storePath,
@@ -246,8 +276,13 @@ test("sessions.describe reads an unconfigured agent from a fixed legacy store", 
 
   expect(described).toMatchObject({
     ok: true,
-    payload: { session: { sessionId: "session-ghost-legacy" } },
+    payload: { session: null },
   });
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: UNKNOWN_AGENT_ID,
+  }).path;
+  expect(sqlitePath).toBeDefined();
+  expect(fs.existsSync(sqlitePath!)).toBe(false);
 });
 
 test("sessions.search searches a retired per-agent store without explicit session keys", async () => {

@@ -15,8 +15,8 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -24,7 +24,8 @@ import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -36,8 +37,11 @@ import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
-import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 type AgentsAddOptions = {
@@ -126,13 +130,15 @@ export async function agentsAddCommand(
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
-    const created = await createAgent({
-      name: nameInput,
-      workspace: workspaceFlag,
-      ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
-      ...(opts.model ? { model: opts.model } : {}),
-      ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
-      transformConfig: transformConfigWithPendingPluginInstalls,
+    const created = await withPluginLifecycleLease({}, async () => {
+      return await createAgent({
+        name: nameInput,
+        workspace: workspaceFlag,
+        ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
+        transformConfig: transformConfigWithPendingPluginInstalls,
+      });
     });
     if (created.status === "error") {
       runtime.error(
@@ -202,7 +208,7 @@ export async function agentsAddCommand(
             return "Required";
           }
           const normalized = normalizeAgentId(value);
-          if (normalized === DEFAULT_AGENT_ID || isReservedSystemAgentId(normalized)) {
+          if (normalized === LEGACY_IMPLICIT_AGENT_ID || isReservedSystemAgentId(normalized)) {
             return `"${normalized}" is reserved. Choose another name.`;
           }
           return undefined;
@@ -211,7 +217,7 @@ export async function agentsAddCommand(
 
     const agentName = normalizeOptionalString(name) ?? "";
     const agentId = normalizeAgentId(agentName);
-    if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+    if (agentId === LEGACY_IMPLICIT_AGENT_ID || isReservedSystemAgentId(agentId)) {
       await prompter.outro(`"${agentId}" is reserved. Choose another name.`);
       return;
     }
@@ -254,9 +260,9 @@ export async function agentsAddCommand(
     const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
-      const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
-      const destAuthPath = resolveAuthStorePath(agentDir);
-      const mainAuthPath = resolveAuthStorePath(undefined);
+      const sourceAuthPath = resolveAuthProfileDatabasePath(sourceAgentDir);
+      const destAuthPath = resolveAuthProfileDatabasePath(agentDir);
+      const mainAuthPath = resolveAuthProfileDatabasePath();
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));
@@ -410,17 +416,17 @@ export async function agentsAddCommand(
     });
     nextConfig = committed.config;
     logConfigUpdated(runtime);
-    await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+    const target = resolveOnboardingAgentTarget(nextConfig, agentId);
+    await ensureOnboardingAgentWorkspace(target, runtime, {
       skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
       skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-      agentId,
     });
 
     const payload = {
-      agentId,
+      agentId: target.agentId,
       name: agentName,
-      workspace: workspaceDir,
-      agentDir,
+      workspace: target.workspaceDir,
+      agentDir: target.agentDir,
     };
     if (opts.json) {
       writeRuntimeJson(runtime, payload);

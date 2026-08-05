@@ -25,6 +25,10 @@ import {
 import { TelegramGetUpdatesConflictAlerter } from "./polling-conflict-alert.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
 import { makeProxyFetch } from "./proxy.js";
+import {
+  createTelegramUpdateOffsetPersistence,
+  normalizeTelegramUpdateId,
+} from "./update-offset-persistence.js";
 import type {
   TelegramOffsetRotationReason,
   TelegramUpdateOffsetRotationInfo,
@@ -50,16 +54,6 @@ function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
       retryInterval: "exponential",
     },
   };
-}
-
-function normalizePersistedUpdateId(value: number | null): number | null {
-  if (value === null) {
-    return null;
-  }
-  if (!Number.isSafeInteger(value) || value < 0) {
-    return null;
-  }
-  return value;
 }
 
 const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, string> = {
@@ -236,33 +230,32 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           }
         },
       });
-      let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
+      const lastUpdateId = normalizeTelegramUpdateId(persistedOffsetRaw);
       if (persistedOffsetRaw !== null && lastUpdateId === null) {
         log(
           `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without offset confirmation.`,
         );
       }
 
-      const persistUpdateId = async (updateId: number) => {
-        const normalizedUpdateId = normalizePersistedUpdateId(updateId);
-        if (normalizedUpdateId === null) {
-          log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
-          return;
-        }
-        if (lastUpdateId !== null && normalizedUpdateId <= lastUpdateId) {
-          return;
-        }
-        lastUpdateId = normalizedUpdateId;
-        try {
+      const offsetPersistence = createTelegramUpdateOffsetPersistence({
+        initialUpdateId: lastUpdateId,
+        writeUpdateId: async (updateId) => {
           await writeTelegramUpdateOffset({
             accountId: account.accountId,
-            updateId: normalizedUpdateId,
+            updateId,
             botToken: token,
           });
-        } catch (err) {
-          logError(`telegram: failed to persist update offset: ${String(err)}`);
-        }
-      };
+        },
+        onInvalidUpdateId: (updateId) => {
+          log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
+        },
+        onRetry: ({ attempt, delayMs, error, updateId }) => {
+          logError(
+            `telegram: failed to persist update offset ${updateId}; retry ${attempt} in ${delayMs}ms: ${formatErrorMessage(error)}`,
+          );
+        },
+        abortSignal: opts.abortSignal,
+      });
 
       // Preserve sticky IPv4 fallback state across clean/conflict restarts.
       // Dirty polling cycles rebuild transport inside TelegramPollingSession.
@@ -288,8 +281,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         botInfo: opts.botInfo,
         abortSignal: opts.abortSignal,
         runnerOptions: createTelegramRunnerOptions(cfg),
-        getLastUpdateId: () => lastUpdateId,
-        persistUpdateId,
+        getAcceptedUpdateId: offsetPersistence.getAcceptedUpdateId,
+        getCommittedUpdateId: offsetPersistence.getCommittedUpdateId,
+        persistUpdateId: offsetPersistence.persistUpdateId,
         log,
         notifyGetUpdatesConflict: () => getUpdatesConflictAlerter.notify(),
         telegramTransport,
@@ -302,7 +296,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           network: account.config.network,
         },
       });
-      await pollingSession.runUntilAbort();
+      try {
+        await pollingSession.runUntilAbort();
+      } finally {
+        await offsetPersistence.stop();
+      }
     } finally {
       pollingLease.release();
     }

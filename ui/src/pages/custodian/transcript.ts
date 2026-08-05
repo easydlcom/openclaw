@@ -2,11 +2,15 @@ import type {
   SystemAgentChatHistoryResult,
   SystemAgentChatHistoryTurn,
 } from "@openclaw/gateway-protocol";
-import { nothing } from "lit";
+import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { WizardStep } from "../../api/types.ts";
+import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
+import { renderMessageGroup } from "../chat/components/chat-message.ts";
+import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
 import type { CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
@@ -17,6 +21,7 @@ export type CustodianMessage = {
   text: string;
   at: number;
   question: CustodianStructuredQuestion | null;
+  step: WizardStep | null;
 };
 
 export function hasUnresolvedCustodianQuestion(
@@ -67,7 +72,7 @@ export function custodianErrorMessage(error: unknown): string {
     : t("custodian.requestFailed");
 }
 
-export function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
+function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
   return {
     kind: "group",
@@ -119,14 +124,12 @@ export function createCustodianTranscriptMessages(
         : turn.text,
     at: turn.at,
     question: null,
+    step: null,
   }));
   return { messages, nextMessageId };
 }
 
-export function renderCustodianEarlierDivider(
-  message: CustodianMessage,
-  boundaryAfterId: number | null,
-) {
+function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterId: number | null) {
   return message.id === boundaryAfterId
     ? renderChatDivider({
         kind: "divider",
@@ -135,4 +138,63 @@ export function renderCustodianEarlierDivider(
         timestamp: message.at,
       })
     : nothing;
+}
+
+export function renderCustodianTranscriptEntry(params: {
+  message: CustodianMessage;
+  boundaryAfterId: number | null;
+  assistantAvatar: string;
+  showQuestion: boolean;
+  questionDisabled: boolean;
+  showWizardStep: boolean;
+  wizardValue: unknown;
+  wizardDisabled: boolean;
+  wizardSecretVisible: boolean;
+  onSelect: (label: string) => void;
+  onSkip: () => void;
+  onWizardValueChange: (value: unknown) => void;
+  onWizardAnswer: (value: unknown) => void;
+  onToggleWizardSecretVisibility: () => void;
+}) {
+  const question = params.message.question;
+  const step = params.message.step;
+  return html`
+    ${params.message.text
+      ? renderMessageGroup(toCustodianMessageGroup(params.message), {
+          showReasoning: false,
+          showToolCalls: false,
+          assistantName: t("custodian.title"),
+          assistantAvatar: params.assistantAvatar,
+        })
+      : nothing}
+    ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
+    ${params.showQuestion && question
+      ? renderCustodianQuestionCard({
+          question,
+          disabled: params.questionDisabled,
+          onSelect: params.onSelect,
+          onSkip: params.onSkip,
+        })
+      : nothing}
+    ${params.showWizardStep && step
+      ? html`<section
+          class="custodian__wizard-step"
+          aria-label=${step.title ?? step.message ?? "Setup"}
+        >
+          ${step.title
+            ? html`<strong class="custodian__wizard-title">${step.title}</strong>`
+            : nothing}
+          ${renderWizardStepControls({
+            step,
+            value: params.wizardValue,
+            busy: params.wizardDisabled,
+            inputId: `custodian-wizard-input-${params.message.id}`,
+            sensitiveRevealed: params.wizardSecretVisible,
+            onValueChange: params.onWizardValueChange,
+            onAnswer: params.onWizardAnswer,
+            onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
+          })}
+        </section>`
+      : nothing}
+  `;
 }

@@ -4,20 +4,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
-import type { HealthSummary } from "../../../commands/health.types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { setAvatar } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
   buildGatewaySnapshotMock,
@@ -25,7 +30,9 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  adoptTailscaleProfileAvatarMock,
   ensureProfileForEmailMock,
+  resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   buildGatewaySnapshotMock: vi.fn(() => ({
@@ -48,18 +55,30 @@ const {
       auth: { mode: "none" },
       controlUi: {
         allowedOrigins: ["http://127.0.0.1:19001"],
-        dangerouslyDisableDeviceAuth: true,
       },
     },
   })),
+  adoptTailscaleProfileAvatarMock: vi.fn(),
   ensureProfileForEmailMock: vi.fn(),
+  resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
 vi.mock("../../../state/user-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../state/user-profiles.js")>();
+  adoptTailscaleProfileAvatarMock.mockImplementation(actual.adoptTailscaleProfileAvatar);
   ensureProfileForEmailMock.mockImplementation(actual.ensureProfileForEmail);
-  return { ...actual, ensureProfileForEmail: ensureProfileForEmailMock };
+  return {
+    ...actual,
+    adoptTailscaleProfileAvatar: adoptTailscaleProfileAvatarMock,
+    ensureProfileForEmail: ensureProfileForEmailMock,
+  };
+});
+
+vi.mock("./auth-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auth-context.js")>();
+  resolveConnectAuthStateMock.mockImplementation(actual.resolveConnectAuthState);
+  return { ...actual, resolveConnectAuthState: resolveConnectAuthStateMock };
 });
 
 vi.mock("../../../config/config.js", () => ({
@@ -254,6 +273,7 @@ function attachGatewayHarness(options: {
     events: [],
     extraHandlers: {},
     buildRequestContext: () => ({}) as GatewayRequestContext,
+    nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
     send,
@@ -283,23 +303,30 @@ function attachGatewayHarness(options: {
     logWsControl,
     send,
     socketSend,
-    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
+    sendRequest: (
+      id: string,
+      method: string,
+      params: Record<string, unknown> = {},
+      traceparent?: string,
+    ) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method,
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
-    sendConnect: (id: string, params: Record<string, unknown>) => {
+    sendConnect: (id: string, params: Record<string, unknown>, traceparent?: string) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method: "connect",
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
@@ -308,6 +335,54 @@ function attachGatewayHarness(options: {
     },
   };
 }
+
+describe("WebSocket request trace context", () => {
+  const upstreamTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+  const upstreamSpanId = "00f067aa0ba902b7";
+  const upstreamTraceparent = `00-${upstreamTraceId}-${upstreamSpanId}-01`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not carry connect-frame trace context into later requests", async () => {
+    let observed: DiagnosticTraceContext | undefined;
+    vi.mocked(handleGatewayRequest).mockImplementation(async () => {
+      observed = getActiveDiagnosticTraceContext();
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-connect-trace",
+      connectNonce: "nonce-connect-trace",
+    });
+
+    harness.sendConnect(
+      "connect-1",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      },
+      upstreamTraceparent,
+    );
+    await waitForFast(() => {
+      expect(harness.client).not.toBeNull();
+    });
+
+    harness.sendRequest("untraced-1", "status.summary");
+
+    await waitForFast(() => {
+      expect(observed).toBeDefined();
+    });
+    expect(observed?.traceId).not.toBe(upstreamTraceId);
+  });
+});
 
 function connectTrustedProxyUser(connId: string) {
   loadConfigMock.mockImplementationOnce(() => ({
@@ -322,7 +397,6 @@ function connectTrustedProxyUser(connId: string) {
       trustedProxies: ["10.0.0.1"],
       controlUi: {
         allowedOrigins: ["http://127.0.0.1:19001"],
-        dangerouslyDisableDeviceAuth: true,
       },
     },
   }));
@@ -540,7 +614,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const isClosed = vi.fn(() => false);
     const harness = attachGatewayHarness({
       connId: "conn-1",
-      requestOrigin: "http://127.0.0.1:19001",
       connectNonce: "nonce-1",
       refreshHealthSnapshot,
       isClosed,
@@ -552,10 +625,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: {
-          id: "openclaw-control-ui",
+          id: "gateway-client",
           version: "dev",
           platform: "test",
-          mode: "ui",
+          mode: "backend",
         },
         role: "operator",
         caps: [],
@@ -582,7 +655,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         auth_mode: "none",
         auth_method: "none",
         auth_provided: "none",
-        client_mode: "ui",
+        client_mode: "backend",
         has_device_identity: false,
         scope_count: 0,
       },
@@ -653,6 +726,89 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
   });
 
+  it("registers a verified profile before detached Tailscale avatar adoption completes", async () => {
+    await withOpenClawTestState({ label: "gateway-tailscale-avatar-detached" }, async () => {
+      let resolveAvatar:
+        | ((profile: {
+            id: string;
+            displayName: string | null;
+            avatarMime: "image/png" | "image/jpeg" | "image/webp" | null;
+            mergedInto: string | null;
+            createdAt: number;
+            updatedAt: number;
+          }) => void)
+        | undefined;
+      adoptTailscaleProfileAvatarMock.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            resolveAvatar = resolve;
+          }),
+      );
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: {
+            login: "ada@github",
+            name: "Ada Lovelace",
+            profilePic: "https://avatars.example.test/ada.png",
+          },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+        sharedAuthProvided: false,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-tailscale-avatar-detached",
+        connectNonce: "nonce-tailscale-avatar-detached",
+      });
+
+      harness.sendConnect("connect-tailscale-avatar-detached", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserId: "ada@github",
+          authenticatedUserIsTailscaleProvider: true,
+          authenticatedUserProfile: { displayName: "Ada Lovelace", hasAvatar: false },
+        });
+        expect(adoptTailscaleProfileAvatarMock).toHaveBeenCalledOnce();
+      });
+      expect(harness.socketSend).toHaveBeenCalled();
+
+      const profile = (
+        harness.client as {
+          authenticatedUserProfile: { profileId: string; displayName: string; updatedAt: number };
+        }
+      ).authenticatedUserProfile;
+      resolveAvatar?.({
+        id: profile.profileId,
+        displayName: profile.displayName,
+        avatarMime: "image/png",
+        mergedInto: null,
+        createdAt: profile.updatedAt,
+        updatedAt: profile.updatedAt + 1,
+      });
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserProfile: { hasAvatar: true, updatedAt: profile.updatedAt + 1 },
+        });
+      });
+    });
+  });
+
   it("falls back to email identity when durable profile resolution fails", async () => {
     ensureProfileForEmailMock.mockImplementationOnce(() => {
       throw new Error("profile store unavailable");
@@ -675,13 +831,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     );
   });
 
-  it("keeps token-authenticated presence free of user identity", async () => {
+  it("does not project user identity for a token-authenticated backend", async () => {
     const harness = attachGatewayHarness({
       connId: "conn-token-userless",
       connectNonce: "nonce-token-userless",
-      requestHost: "gateway.example.com:18789",
-      requestOrigin: "http://127.0.0.1:19001",
-      remoteAddr: "203.0.113.50",
       resolvedAuth: {
         mode: "token",
         token: "gateway-token",
@@ -693,10 +846,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       client: {
-        id: "openclaw-control-ui",
+        id: "gateway-client",
         version: "dev",
         platform: "test",
-        mode: "ui",
+        mode: "backend",
       },
       role: "operator",
       caps: [],
@@ -714,12 +867,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     ).toMatchObject({
       ok: true,
     });
-    await waitForFast(() => {
-      expect(upsertPresenceMock).toHaveBeenCalledWith(
-        "conn-token-userless",
-        expect.not.objectContaining({ user: expect.anything() }),
-      );
-    });
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(harness.client).not.toMatchObject({ authenticatedUserId: expect.anything() });
     expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
   });
@@ -801,6 +949,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const rateLimiter: AuthRateLimiter = {
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs })),
       recordFailure: vi.fn(),
+      recordFailureAndDelay: vi.fn(async () => {}),
       reset: vi.fn(),
       size: vi.fn(() => 0),
       prune: vi.fn(),
